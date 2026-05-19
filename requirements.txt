@@ -1,0 +1,12 @@
+decord
+kagglehub
+numpy
+opencv-python
+pandas
+pytorchvideo
+scikit-learn
+scipy
+torch
+torchvision
+tqdm
+ultralytics
