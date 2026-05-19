@@ -13,10 +13,10 @@ from scripts.data.download_dataset import download_dataset
 
 
 def create_yolo_dataset_notebook1(
-    output_dir: str = "/content/cow_detection_dataset",
+    output_dir: str = "/home/nahoms/resonance-projects/Cow-Anomaly-Detection/scripts/dataset/cow_detection_dataset/",
     fps: int = 25,
     val_ratio: float = 0.2,
-    data_root: str | None = None,
+    data_root: str | None = "/home/nahoms/resonance-projects/Cow-Anomaly-Detection/scripts/dataset/fandaoerji/cbvd-5cow-behavior-video-dataset/versions/11",
 ) -> pd.DataFrame:
     """YOLO dataset generation from notebook 1 (without deduplication)."""
     if data_root is None:
