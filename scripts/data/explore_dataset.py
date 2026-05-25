@@ -18,14 +18,15 @@ def explore_dataset(data_root: str | None = None):
             rel = os.path.relpath(root, data_root)
             print(f"  {rel}/  -> {len(files)} files (first 3: {files[:3]})")
 
-    annotations_dir = os.path.join(data_root, "miniannotations")
+    annotations_dir = os.path.join(data_root, "annotations")
     frames_dir = os.path.join(data_root, "rawframes_mini")
 
-    ann_file = None
-    for f in os.listdir(annotations_dir):
-        if f.endswith(".csv"):
-            ann_file = os.path.join(annotations_dir, f)
-            break
+    ann_file = os.path.join(annotations_dir, "ava_train_v2.1.csv")
+    if not os.path.exists(ann_file):
+        for f in os.listdir(annotations_dir):
+            if f.endswith(".csv"):
+                ann_file = os.path.join(annotations_dir, f)
+                break
     print(f"\nUsing annotations: {ann_file}")
 
     df = pd.read_csv(ann_file, header=None, dtype={0: str})
@@ -35,7 +36,6 @@ def explore_dataset(data_root: str | None = None):
     print(df.head())
 
     valid_ids = set(os.listdir(frames_dir))
-    df["video_id"] = df["video_id"].apply(lambda x: str(int(x)))
     df = df[df["video_id"].isin(valid_ids)]
     print(f"Filtered dataset size: {len(df)}")
     print(f"Number of unique video IDs: {df['video_id'].nunique()}")
