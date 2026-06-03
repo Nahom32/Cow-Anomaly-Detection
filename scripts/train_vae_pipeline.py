@@ -16,7 +16,7 @@ def main():
     FRAMES_DIR = "/root/.cache/kagglehub/datasets/fandaoerji/cbvd-5cow-behavior-video-dataset/versions/11/rawframes_mini"
     ANNOTATIONS_CSV = "/root/.cache/kagglehub/datasets/fandaoerji/cbvd-5cow-behavior-video-dataset/versions/11/annotations/ava_train_v2.1.csv"
     NORMAL_ACTION_IDS = [0, 1, 2]
-    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    DEVICE = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
     EPOCHS = 50
     BATCH_SIZE = 64
     LR = 1e-3
