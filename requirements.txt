@@ -1,9 +1,11 @@
 decord
 kagglehub
+matplotlib
 numpy
 opencv-python
 pandas
 pytorchvideo
+pyyaml
 scikit-learn
 scipy
 torch
