@@ -1,3 +1,6 @@
+import argparse
+import glob
+import json
 import os
 import time
 
@@ -20,6 +23,18 @@ from scripts.models.vae import VAE, plot_history, save_history, train_vae
 
 
 DEFAULT_OUTPUT_DIR = "pipeline_output"
+STATE_FILE = ".pipeline_state.json"
+
+# Step names for display
+STEP_NAMES = {
+    1: "Download dataset",
+    2: "Create YOLO dataset",
+    3: "Create YOLO data YAML",
+    4: "Train YOLO26n",
+    5: "Create feature extractor",
+    6: "Train flat VAE",
+    7: "Train LSTM-VAE",
+}
 
 
 def get_device():
@@ -30,15 +45,37 @@ def get_device():
     return "cpu"
 
 
+def load_state(output_dir):
+    path = os.path.join(output_dir, STATE_FILE)
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    return {}
+
+
+def save_state(output_dir, state):
+    path = os.path.join(output_dir, STATE_FILE)
+    with open(path, "w") as f:
+        json.dump(state, f, indent=2)
+
+
+def find_best_pt():
+    candidates = glob.glob(os.path.join("cow_detector", "yolo26n_cbvd", "weights", "best.pt"))
+    if not candidates:
+        candidates = glob.glob(os.path.join("cow_detector", "**", "best.pt"), recursive=True)
+    return candidates[0] if candidates else None
+
+
+# ── Step runners ──────────────────────────────────────────────────────
+
 def step_download_dataset(output_dir):
     print("=" * 60)
     print("STEP 1: Downloading dataset")
     print("=" * 60)
     data_root = download_dataset()
-
     annotations_csv = os.path.join(data_root, "annotations", "ava_train_v2.1.csv")
     frames_dir = os.path.join(data_root, "rawframes_mini")
-    return data_root, annotations_csv, frames_dir
+    return {"data_root": data_root, "annotations_csv": annotations_csv, "frames_dir": frames_dir}
 
 
 def step_create_yolo_dataset(data_root, output_dir):
@@ -47,7 +84,7 @@ def step_create_yolo_dataset(data_root, output_dir):
     print("=" * 60)
     yolo_data_dir = os.path.join(output_dir, "yolo_dataset")
     create_yolo_dataset(output_dir=yolo_data_dir, data_root=data_root)
-    return yolo_data_dir
+    return {"yolo_data_dir": yolo_data_dir}
 
 
 def step_create_yaml(yolo_data_dir):
@@ -64,17 +101,22 @@ def step_create_yaml(yolo_data_dir):
     with open(yaml_path, "w") as f:
         yaml.dump(content, f, default_flow_style=False)
     print(f"Written: {yaml_path}")
-    return yaml_path
+    return {"data_yaml": yaml_path}
 
 
 def step_train_yolo(data_yaml, output_dir, config):
     print("\n" + "=" * 60)
     print("STEP 4: Training YOLO26n")
     print("=" * 60)
-    results = train_yolo26n(data_yaml=data_yaml)
-    yolo_weights = os.path.join("cow_detector", "yolo26n_cbvd", "weights", "best.pt")
+    train_yolo26n(data_yaml=data_yaml)
+    yolo_weights = find_best_pt()
+    if not yolo_weights:
+        raise FileNotFoundError(
+            "YOLO training completed but could not find best.pt. "
+            "Checked cow_detector/yolo26n_cbvd/weights/ and recursive search."
+        )
     print(f"YOLO weights saved at: {yolo_weights}")
-    return yolo_weights
+    return {"yolo_weights": yolo_weights}
 
 
 def step_feature_extractor(yolo_weights, device):
@@ -125,7 +167,6 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     np.save(os.path.join(output_dir, "flat_vae_feature_max.npy"), max_val)
     plot_history(history)
     print("Flat VAE complete.")
-    return features
 
 
 def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output_dir, config):
@@ -196,24 +237,112 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
     print("LSTM-VAE complete.")
 
 
+# ── Skip checks ───────────────────────────────────────────────────────
+
+def is_step_done(step, state, output_dir):
+    """Check whether a step's output already exists on disk."""
+    if step == 1:
+        return "data_root" in state and os.path.isdir(state["data_root"])
+    if step == 2:
+        d = state.get("yolo_data_dir", "")
+        return os.path.isdir(os.path.join(d, "train", "images"))
+    if step == 3:
+        return os.path.isfile(state.get("data_yaml", ""))
+    if step == 4:
+        return find_best_pt() is not None
+    if step == 6:
+        return os.path.isfile(os.path.join(output_dir, "flat_vae_model.pth"))
+    if step == 7:
+        return os.path.isfile(os.path.join(output_dir, "lstm_vae_model.pth"))
+    return False
+
+
+# ── Main ──────────────────────────────────────────────────────────────
+
 def main():
-    output_dir = DEFAULT_OUTPUT_DIR
+    parser = argparse.ArgumentParser(description="Cow Anomaly Detection — Full Pipeline")
+    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Output directory (default: pipeline_output)")
+    parser.add_argument("--from-step", type=int, default=1, choices=range(1, 8),
+                        help="Force re-run from this step onwards (1-7), ignoring prior state")
+    parser.add_argument("--force", action="store_true", help="Re-run all steps, ignoring prior state")
+    args = parser.parse_args()
+
+    output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
     device = get_device()
-    print(f"Device: {device}")
-    print(f"Output: {os.path.abspath(output_dir)}")
     config = CONFIG.copy()
+
+    print(f"Device:  {device}")
+    print(f"Output:  {os.path.abspath(output_dir)}")
+
+    state = load_state(output_dir)
+    force_step = 1 if args.force else args.from_step
+
+    if state:
+        print(f"Prior state found: last completed step {state.get('last_step', '?')}")
+    if force_step > 1:
+        print(f"Forcing re-run from step {force_step}")
 
     t0 = time.time()
 
-    data_root, annotations_csv, frames_dir = step_download_dataset(output_dir)
-    yolo_data_dir = step_create_yolo_dataset(data_root, output_dir)
-    data_yaml = step_create_yaml(yolo_data_dir)
-    yolo_weights = step_train_yolo(data_yaml, output_dir, config)
-    feature_extractor, hook = step_feature_extractor(yolo_weights, device)
+    # Step 1: Download
+    if force_step <= 1 and is_step_done(1, state, output_dir):
+        print(f"\n[SKIP] Step 1: Download dataset (already at {state['data_root']})")
+    else:
+        state.update(step_download_dataset(output_dir))
+        state["last_step"] = 1
+        save_state(output_dir, state)
 
-    step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, output_dir, config)
-    step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output_dir, config)
+    # Step 2: YOLO dataset
+    if force_step <= 2 and is_step_done(2, state, output_dir):
+        print(f"\n[SKIP] Step 2: YOLO dataset (already at {state['yolo_data_dir']})")
+    else:
+        state.update(step_create_yolo_dataset(state["data_root"], output_dir))
+        state["last_step"] = 2
+        save_state(output_dir, state)
+
+    # Step 3: YAML
+    if force_step <= 3 and is_step_done(3, state, output_dir):
+        print(f"\n[SKIP] Step 3: data.yaml (already at {state['data_yaml']})")
+    else:
+        state.update(step_create_yaml(state["yolo_data_dir"]))
+        state["last_step"] = 3
+        save_state(output_dir, state)
+
+    # Step 4: YOLO training
+    if force_step <= 4 and is_step_done(4, state, output_dir):
+        yolo_weights = find_best_pt()
+        state["yolo_weights"] = yolo_weights
+        print(f"\n[SKIP] Step 4: YOLO training (found {yolo_weights})")
+    else:
+        state.update(step_train_yolo(state["data_yaml"], output_dir, config))
+        state["last_step"] = 4
+        save_state(output_dir, state)
+
+    # Step 5: Feature extractor (always runs — in-memory object)
+    feature_extractor, hook = step_feature_extractor(state["yolo_weights"], device)
+
+    # Step 6: Flat VAE
+    if force_step <= 6 and is_step_done(6, state, output_dir):
+        print(f"\n[SKIP] Step 6: flat VAE (found {os.path.join(output_dir, 'flat_vae_model.pth')})")
+    else:
+        step_flat_vae(
+            state["annotations_csv"], state["frames_dir"],
+            feature_extractor, hook, device, output_dir, config,
+        )
+        state["last_step"] = 6
+        save_state(output_dir, state)
+
+    # Step 7: LSTM-VAE
+    if force_step <= 7 and is_step_done(7, state, output_dir):
+        print(f"\n[SKIP] Step 7: LSTM-VAE (found {os.path.join(output_dir, 'lstm_vae_model.pth')})")
+    else:
+        step_lstm_vae(
+            state["annotations_csv"], state["frames_dir"],
+            feature_extractor, device, output_dir, config,
+        )
+        state["last_step"] = 7
+        save_state(output_dir, state)
 
     hook.remove()
 
@@ -225,6 +354,8 @@ def main():
     print("=" * 60)
     print("\nArtifacts:")
     for f in sorted(os.listdir(output_dir)):
+        if f.startswith("."):
+            continue
         size = os.path.getsize(os.path.join(output_dir, f))
         print(f"  {f:40s} {size / 1024:.1f} KB")
 

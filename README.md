@@ -48,8 +48,29 @@ scripts/
 python -m scripts.run_full_pipeline
 
 # Override output directory
-OUTPUT_DIR=my_experiment ./scripts/run_full_pipeline.sh
+python -m scripts.run_full_pipeline --output-dir my_experiment
 ```
+
+### Resuming a previous run
+
+The pipeline writes a `.pipeline_state.json` to the output directory after each step. On re-run, completed steps are detected by their output files and skipped automatically.
+
+```bash
+# Re-run — skips all completed steps automatically
+python -m scripts.run_full_pipeline
+
+# Force re-run from step 4 (YOLO training) onwards
+python -m scripts.run_full_pipeline --from-step 4
+
+# Ignore all prior state and re-run everything
+python -m scripts.run_full_pipeline --force
+```
+
+| Flag | Effect |
+|------|--------|
+| `--output-dir DIR` | Output directory (default: `pipeline_output`) |
+| `--from-step N` | Re-run from step N onwards, skip steps 1..N-1 if their outputs exist |
+| `--force` | Re-run all steps, ignore all prior state |
 
 ### What the pipeline does
 
