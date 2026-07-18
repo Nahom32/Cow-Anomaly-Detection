@@ -60,9 +60,15 @@ def save_state(output_dir, state):
 
 
 def find_best_pt():
-    candidates = glob.glob(os.path.join("cow_detector", "yolo26n_cbvd", "weights", "best.pt"))
+    # YOLO internally prepends runs/detect/ to the project path
+    for project_dir in ["runs/detect/cow_detector", "cow_detector"]:
+        exact = os.path.join(project_dir, "yolo26n_cbvd", "weights", "best.pt")
+        if os.path.isfile(exact):
+            return exact
+    # Broad recursive fallback
+    candidates = glob.glob("runs/detect/**/best.pt", recursive=True)
     if not candidates:
-        candidates = glob.glob(os.path.join("cow_detector", "**", "best.pt"), recursive=True)
+        candidates = glob.glob("**/best.pt", recursive=True)
     return candidates[0] if candidates else None
 
 
@@ -113,7 +119,7 @@ def step_train_yolo(data_yaml, output_dir, config):
     if not yolo_weights:
         raise FileNotFoundError(
             "YOLO training completed but could not find best.pt. "
-            "Checked cow_detector/yolo26n_cbvd/weights/ and recursive search."
+            "Searched: runs/detect/cow_detector/, cow_detector/, and recursive glob."
         )
     print(f"YOLO weights saved at: {yolo_weights}")
     return {"yolo_weights": yolo_weights}
