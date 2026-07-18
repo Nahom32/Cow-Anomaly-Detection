@@ -62,17 +62,20 @@ class CowSequenceDataset(Dataset):
             img_path = os.path.join(
                 self.frames_dir, video_id, f"img_{frame_idx:05d}.jpg"
             )
-            img = cv2.imread(img_path)
-            if img is None:
+            if not os.path.isfile(img_path):
                 feat = np.zeros(256, dtype=np.float32)
             else:
-                h, w = img.shape[:2]
-                bbox = (x1 * w, y1 * h, x2 * w, y2 * h)
-                feat = extract_cow_features(
-                    img, bbox, self.feature_extractor, device=self.device
-                )
-                if feat is None:
+                img = cv2.imread(img_path)
+                if img is None:
                     feat = np.zeros(256, dtype=np.float32)
+                else:
+                    h, w = img.shape[:2]
+                    bbox = (x1 * w, y1 * h, x2 * w, y2 * h)
+                    feat = extract_cow_features(
+                        img, bbox, self.feature_extractor, device=self.device
+                    )
+                    if feat is None:
+                        feat = np.zeros(256, dtype=np.float32)
             seq_features.append(feat)
         seq_features = np.stack(seq_features, axis=0)
         return torch.tensor(seq_features, dtype=torch.float32)
