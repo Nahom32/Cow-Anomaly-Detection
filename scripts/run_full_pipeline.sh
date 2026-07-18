@@ -4,13 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-OUTPUT_DIR="${OUTPUT_DIR:-pipeline_output}"
-
 echo "============================================"
 echo " Cow Anomaly Detection — Full Pipeline"
 echo "============================================"
 echo "Project : $PROJECT_DIR"
-echo "Output  : $PROJECT_DIR/$OUTPUT_DIR"
 echo ""
 
 cd "$PROJECT_DIR"
@@ -42,10 +39,10 @@ else:
     print('WARNING: No GPU detected, running on CPU')
 "
 
-# Run the full pipeline
+# Run the full pipeline (forward all CLI args: --from-step, --force, --output-dir)
 echo ""
 echo "Starting pipeline..."
-python3 -m scripts.run_full_pipeline
+python3 -m scripts.run_full_pipeline "$@"
 
 echo ""
 echo "Pipeline finished."
