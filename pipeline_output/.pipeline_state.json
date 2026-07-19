@@ -1,0 +1,9 @@
+{
+  "data_root": "/home/nahoms/.cache/kagglehub/datasets/fandaoerji/cbvd-5cow-behavior-video-dataset/versions/11",
+  "annotations_csv": "/home/nahoms/.cache/kagglehub/datasets/fandaoerji/cbvd-5cow-behavior-video-dataset/versions/11/annotations/ava_train_v2.1.csv",
+  "frames_dir": "/home/nahoms/.cache/kagglehub/datasets/fandaoerji/cbvd-5cow-behavior-video-dataset/versions/11/rawframes_mini",
+  "last_step": 7,
+  "yolo_data_dir": "pipeline_output/yolo_dataset",
+  "data_yaml": "pipeline_output/yolo_dataset/data.yaml",
+  "yolo_weights": "runs/detect/cow_detector/yolo26n_cbvd/weights/best.pt"
+}

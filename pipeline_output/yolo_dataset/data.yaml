@@ -1,0 +1,5 @@
+names:
+  0: cow
+path: /home/nahoms/resonance-projects/Cow-Anomaly-Detection/pipeline_output/yolo_dataset
+train: train/images
+val: val/images
