@@ -15,6 +15,7 @@ from scripts.config import CONFIG
 from scripts.data.build_features import build_feature_dataset, normalize_features
 from scripts.data.create_yolo_dataset import create_yolo_dataset
 from scripts.data.download_dataset import download_dataset
+from scripts.data.feature_cache import open_run_feature_cache
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
@@ -126,18 +127,18 @@ def step_train_yolo(data_yaml, output_dir, config):
     return {"yolo_weights": yolo_weights}
 
 
-def step_feature_extractor(yolo_weights, device):
+def step_feature_extractor(yolo_weights, device, layer_index=9):
     print("\n" + "=" * 60)
     print("STEP 5: Creating YOLO feature extractor")
     print("=" * 60)
     feature_extractor, hook = create_feature_extractor(
-        yolo_weights, layer_index=9, device=device
+        yolo_weights, layer_index=layer_index, device=device
     )
-    print("Feature extractor ready (SPPF layer 9)")
+    print(f"Feature extractor ready (layer {layer_index})")
     return feature_extractor, hook
 
 
-def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, output_dir, config):
+def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, output_dir, config, feature_cache=None):
     print("\n" + "=" * 60)
     print("STEP 6: Training flat VAE")
     print("=" * 60)
@@ -148,6 +149,7 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     features = build_feature_dataset(
         df, frames_dir, feature_extractor,
         normal_action_ids=config["normal_action_ids"], device=device,
+        feature_cache=feature_cache,
     )
     print(f"Extracted {features.shape[0]} features, dim={features.shape[1]}")
 
@@ -177,7 +179,7 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     print("Flat VAE complete.")
 
 
-def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output_dir, config):
+def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output_dir, config, feature_cache=None):
     print("\n" + "=" * 60)
     print("STEP 7: Training LSTM-VAE")
     print("=" * 60)
@@ -189,6 +191,7 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
         df=df,
         frames_dir=frames_dir,
         feature_extractor=feature_extractor,
+        feature_cache=feature_cache,
         seq_len=config["seq_len"],
         stride=config["seq_stride"],
         normal_action_ids=config["normal_action_ids"],
@@ -211,10 +214,12 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
         df=df,
         frames_dir=frames_dir,
         feature_extractor=feature_extractor,
+        feature_cache=feature_cache,
         seq_len=config["seq_len"],
         stride=config["seq_stride"],
         normal_action_ids=config["normal_action_ids"],
         device=device,
+        seed=config["random_seed"],
     )
 
     video_ids = list(set(key[0] for key in seq_dataset.tracks.keys()))
@@ -335,7 +340,16 @@ def main():
         save_state(output_dir, state)
 
     # Step 5: Feature extractor (always runs — in-memory object)
-    feature_extractor, hook = step_feature_extractor(state["yolo_weights"], device)
+    feature_extractor, hook = step_feature_extractor(
+        state["yolo_weights"], device, layer_index=config["feature_layer"]
+    )
+
+    # One cache shared by both VAE stages, keyed by the weights hash, so each crop
+    # is extracted once per run no matter how many datasets are built over it.
+    feature_cache = open_run_feature_cache(
+        output_dir, state["yolo_weights"], layer_index=config["feature_layer"],
+        input_size=config["feature_input_size"],
+    )
 
     # Step 6: Flat VAE
     if force_step <= 6 and is_step_done(6, state, output_dir):
@@ -344,6 +358,7 @@ def main():
         step_flat_vae(
             state["annotations_csv"], state["frames_dir"],
             feature_extractor, hook, device, output_dir, config,
+            feature_cache=feature_cache,
         )
         state["last_step"] = 6
         save_state(output_dir, state)
@@ -355,6 +370,7 @@ def main():
         step_lstm_vae(
             state["annotations_csv"], state["frames_dir"],
             feature_extractor, device, output_dir, config,
+            feature_cache=feature_cache,
         )
         state["last_step"] = 7
         save_state(output_dir, state)

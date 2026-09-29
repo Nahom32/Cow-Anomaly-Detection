@@ -7,6 +7,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 
 from scripts.data.build_features import build_feature_dataset, normalize_features
+from scripts.data.feature_cache import open_run_feature_cache
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.vae import VAE, plot_history, save_history, train_vae
 from scripts.utils.seeding import set_seed
@@ -33,11 +34,13 @@ def main():
 
     print("Creating YOLO feature extractor...")
     feature_extractor, hook = create_feature_extractor(YOLO_MODEL_PATH, layer_index=9, device=DEVICE)
+    feature_cache = open_run_feature_cache(OUTPUT_DIR, YOLO_MODEL_PATH, layer_index=9)
 
     print("Extracting features from normal behaviour frames...")
     features = build_feature_dataset(
         df, FRAMES_DIR, feature_extractor,
         normal_action_ids=NORMAL_ACTION_IDS, device=DEVICE,
+        feature_cache=feature_cache,
     )
     print(f"Extracted {features.shape[0]} feature vectors of dimension {features.shape[1]}")
 

@@ -91,13 +91,25 @@ All artifacts are saved to `pipeline_output/`:
 | File | Description |
 |------|-------------|
 | `cow_detector/yolo26n_cbvd/weights/best.pt` | Trained YOLO26n weights |
+| `feature_cache/` | Cached backbone features keyed by the YOLO weights hash (see below) |
 | `flat_vae_model.pth` | Trained flat VAE state dict |
 | `flat_vae_history.csv` | Training loss history |
 | `flat_vae_feature_min.npy` | Min values for feature normalisation |
 | `flat_vae_feature_max.npy` | Max values for feature normalisation |
 | `lstm_vae_model.pth` | Trained LSTM-VAE state dict |
+| `lstm_vae_history.csv` | Training loss history (recon and KL logged separately) |
 | `lstm_vae_feature_mean.npy` | Mean values for feature normalisation |
 | `lstm_vae_feature_std.npy` | Std values for feature normalisation |
+| `run_manifest.json` | Provenance for the run: git SHA, config hash, seed, feature hashes |
+
+### Feature cache
+
+Extracting features runs the YOLO backbone once per crop. Features are therefore
+cached to `feature_cache/` as a `(N, D)` array plus its key list and validity mask,
+keyed by the SHA-256 of the YOLO weights and the hooked layer. Both VAE stages
+share one cache, so re-running a pipeline invocation reuses existing features and
+only extracts the crops it has not seen before. Deleting the directory forces a
+full re-extraction; changing the weights creates a new cache automatically.
 
 ## Running individual steps
 

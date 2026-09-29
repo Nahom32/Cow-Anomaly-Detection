@@ -9,6 +9,10 @@ CONFIG = {
     "yolo_imgsz": 640,
     "yolo_batch": 16,
 
+    # Feature extraction
+    "feature_layer": 9,  # SPPF layer hooked for feature extraction
+    "feature_input_size": 224,
+
     # Flat VAE
     "vae_epochs": 50,
     "vae_batch_size": 64,

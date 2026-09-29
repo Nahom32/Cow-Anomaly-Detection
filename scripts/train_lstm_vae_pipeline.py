@@ -6,6 +6,7 @@ import torch
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, SubsetRandomSampler
 
+from scripts.data.feature_cache import open_run_feature_cache
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
@@ -34,12 +35,14 @@ def main():
 
     print("Loading YOLO feature extractor...")
     feature_extractor, hook = create_feature_extractor(YOLO_MODEL_PATH, layer_index=9, device=DEVICE)
+    feature_cache = open_run_feature_cache(OUTPUT_DIR, YOLO_MODEL_PATH, layer_index=9)
 
     print("Building sequence dataset...")
     seq_dataset = CowSequenceDataset(
         df=df,
         frames_dir=FRAMES_DIR,
         feature_extractor=feature_extractor,
+        feature_cache=feature_cache,
         seq_len=SEQ_LEN,
         stride=STRIDE,
         normal_action_ids=NORMAL_ACTION_IDS,
@@ -63,6 +66,7 @@ def main():
         df=df,
         frames_dir=FRAMES_DIR,
         feature_extractor=feature_extractor,
+        feature_cache=feature_cache,
         seq_len=SEQ_LEN,
         stride=STRIDE,
         normal_action_ids=NORMAL_ACTION_IDS,
