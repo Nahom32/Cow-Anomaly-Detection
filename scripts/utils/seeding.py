@@ -5,6 +5,7 @@ run in this repo was reproducible. Every `__main__` block now calls `set_seed()`
 before touching a random number generator.
 """
 
+import hashlib
 import os
 import random
 
@@ -55,3 +56,25 @@ def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
+
+
+def derive_seed(*parts):
+    """Derive a stable 31-bit seed from arbitrary parts.
+
+    Uses blake2b rather than `hash()`: python's string hash is salted per
+    process, so a `hash()`-derived seed changes between runs and defeats the
+    point of seeding. This is stable across processes, machines and releases.
+    """
+    payload = "\x1f".join(repr(p) for p in parts).encode("utf-8")
+    digest = hashlib.blake2b(payload, digest_size=8).digest()
+    return int.from_bytes(digest, "big") % (2**31 - 1)
+
+
+def rng_for(*parts):
+    """A numpy Generator seeded by `derive_seed(*parts)`.
+
+    Use this for anything that must be reproducible per data item (a window, a
+    crop, a sample) rather than per run, so the value does not depend on the
+    order in which items happen to be requested.
+    """
+    return np.random.default_rng(derive_seed(*parts))

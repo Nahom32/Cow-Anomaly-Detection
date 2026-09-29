@@ -7,6 +7,9 @@ import torch
 from torch.utils.data import Dataset
 
 from scripts.models.feature_extractor import extract_cow_features
+from scripts.utils.seeding import DEFAULT_SEED, rng_for
+
+FEATURE_DIM_FALLBACK = 256
 
 
 class CowSequenceDataset(Dataset):
@@ -21,6 +24,8 @@ class CowSequenceDataset(Dataset):
         fps=25,
         noise_std=0.05,
         device="cuda",
+        seed=DEFAULT_SEED,
+        feature_dim=FEATURE_DIM_FALLBACK,
     ):
         self.df = df
         self.frames_dir = frames_dir
@@ -30,6 +35,8 @@ class CowSequenceDataset(Dataset):
         self.fps = fps
         self.noise_std = noise_std
         self.device = device
+        self.seed = seed
+        self.feature_dim = feature_dim
         self.normal_action_ids = set(normal_action_ids or [])
 
         self.tracks = defaultdict(list)
@@ -87,6 +94,12 @@ class CowSequenceDataset(Dataset):
                 seq_feats.append(None)
                 valid_mask.append(False)
 
+        # The fill noise is derived from (seed, video, track, window start) rather
+        # than drawn from global state, so the same window yields the same filled
+        # sequence on every epoch and in every process. Resampling from the global
+        # RNG made the val set stochastic and the train set order-dependent.
+        rng = rng_for(self.seed, video_id, target_id, start, self.noise_std)
+
         # Fill gaps: prefer previous frame + noise, fall back to next, then zeros
         filled = []
         prev_feat = None
@@ -96,7 +109,7 @@ class CowSequenceDataset(Dataset):
                 filled.append(feat)
             elif prev_feat is not None:
                 # Previous frame + small noise for temporal smoothness
-                filled.append(prev_feat + np.random.randn(*prev_feat.shape).astype(np.float32) * self.noise_std)
+                filled.append(prev_feat + (rng.standard_normal(prev_feat.shape) * self.noise_std).astype(np.float32))
             else:
                 # First frame(s) missing — try next valid frame + noise
                 next_feat = None
@@ -105,10 +118,10 @@ class CowSequenceDataset(Dataset):
                         next_feat = seq_feats[j]
                         break
                 if next_feat is not None:
-                    filled.append(next_feat + np.random.randn(*next_feat.shape).astype(np.float32) * self.noise_std)
+                    filled.append(next_feat + (rng.standard_normal(next_feat.shape) * self.noise_std).astype(np.float32))
                 else:
                     # Entire sequence is bad — zeros as last resort
-                    filled.append(np.zeros(256, dtype=np.float32))
+                    filled.append(np.zeros(self.feature_dim, dtype=np.float32))
 
         seq_features = np.stack(filled, axis=0)
         return torch.tensor(seq_features, dtype=torch.float32)

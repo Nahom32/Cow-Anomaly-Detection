@@ -193,6 +193,7 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
         stride=config["seq_stride"],
         normal_action_ids=config["normal_action_ids"],
         device=device,
+        seed=config["random_seed"],
     )
     print(f"Total sequences: {len(seq_dataset)}")
 

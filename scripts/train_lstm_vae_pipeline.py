@@ -44,6 +44,7 @@ def main():
         stride=STRIDE,
         normal_action_ids=NORMAL_ACTION_IDS,
         device=DEVICE,
+        seed=SEED,
     )
     print(f"Total sequences: {len(seq_dataset)}")
 
@@ -66,6 +67,7 @@ def main():
         stride=STRIDE,
         normal_action_ids=NORMAL_ACTION_IDS,
         device=DEVICE,
+        seed=SEED,
     )
 
     video_ids = list(set(key[0] for key in seq_dataset.tracks.keys()))
