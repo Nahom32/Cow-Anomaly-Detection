@@ -22,6 +22,7 @@ from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
 from scripts.models.train_yolo_n import train_yolo26n
 from scripts.models.vae import VAE, plot_history, train_vae
 from scripts.utils.history import save_history
+from scripts.utils.plotting import setup_matplotlib
 from scripts.utils.seeding import set_seed
 
 
@@ -139,7 +140,7 @@ def step_feature_extractor(yolo_weights, device, layer_index=9):
     return feature_extractor, hook
 
 
-def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, output_dir, config, feature_cache=None):
+def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, output_dir, config, feature_cache=None, headless=None):
     print("\n" + "=" * 60)
     print("STEP 6: Training flat VAE")
     print("=" * 60)
@@ -176,7 +177,7 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     torch.save(vae.state_dict(), os.path.join(output_dir, "flat_vae_model.pth"))
     np.save(os.path.join(output_dir, "flat_vae_feature_min.npy"), min_val)
     np.save(os.path.join(output_dir, "flat_vae_feature_max.npy"), max_val)
-    plot_history(history)
+    plot_history(history, save_path=os.path.join(output_dir, "flat_vae_history.png"), headless=headless)
     print("Flat VAE complete.")
 
 
@@ -283,6 +284,8 @@ def main():
     parser.add_argument("--force", action="store_true", help="Re-run all steps, ignoring prior state")
     parser.add_argument("--seed", type=int, default=None,
                         help="Override CONFIG['random_seed']")
+    parser.add_argument("--headless", action="store_true",
+                        help="Force the non-interactive matplotlib backend (no plot window)")
     args = parser.parse_args()
 
     output_dir = args.output_dir
@@ -292,9 +295,11 @@ def main():
     if args.seed is not None:
         config["random_seed"] = args.seed
     seed = set_seed(config["random_seed"])
+    headless = setup_matplotlib(True if args.headless else None)
 
     print(f"Device:  {device}")
     print(f"Seed:    {seed}")
+    print(f"Plots:   {headless}")
     print(f"Output:  {os.path.abspath(output_dir)}")
 
     state = load_state(output_dir)
@@ -360,7 +365,7 @@ def main():
         step_flat_vae(
             state["annotations_csv"], state["frames_dir"],
             feature_extractor, hook, device, output_dir, config,
-            feature_cache=feature_cache,
+            feature_cache=feature_cache, headless=headless,
         )
         state["last_step"] = 6
         save_state(output_dir, state)

@@ -70,7 +70,7 @@ def main():
     np.save(os.path.join(OUTPUT_DIR, "feature_min.npy"), min_val)
     np.save(os.path.join(OUTPUT_DIR, "feature_max.npy"), max_val)
 
-    plot_history(history)
+    plot_history(history, save_path=os.path.join(OUTPUT_DIR, "vae_training_history.png"))
 
     hook.remove()
     print("Done.")

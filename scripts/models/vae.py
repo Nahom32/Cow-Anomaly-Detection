@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 from scripts.utils.history import empty_history
+from scripts.utils.plotting import setup_matplotlib, show_or_close
 
 
 class VAE(nn.Module):
@@ -100,29 +101,37 @@ def train_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"):
     return history
 
 
-def plot_history(history):
+def plot_history(history, save_path=None, headless=None):
+    """Plot loss curves.
+
+    Never blocks: the figure is written to `save_path` when given, shown without
+    blocking when the backend is interactive, and always closed.
+    """
+    setup_matplotlib(headless)
+
     epochs = history["epoch"]
-    plt.figure(figsize=(12, 4))
-    plt.subplot(1, 3, 1)
-    plt.plot(epochs, history["train_loss"], label="Train")
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+
+    axes[0].plot(epochs, history["train_loss"], label="Train")
     if history.get("val_loss"):
-        plt.plot(epochs, history["val_loss"], label="Val")
-    plt.xlabel("Epoch")
-    plt.ylabel("Total Loss")
-    plt.legend()
+        axes[0].plot(epochs, history["val_loss"], label="Val")
+    axes[0].set_xlabel("Epoch")
+    axes[0].set_ylabel("Total Loss")
+    axes[0].legend()
 
-    plt.subplot(1, 3, 2)
-    plt.plot(epochs, history["train_recon"], label="Train Recon")
+    axes[1].plot(epochs, history["train_recon"], label="Train Recon")
     if history.get("val_recon"):
-        plt.plot(epochs, history["val_recon"], label="Val Recon")
-    plt.xlabel("Epoch")
-    plt.ylabel("Reconstruction Loss")
+        axes[1].plot(epochs, history["val_recon"], label="Val Recon")
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("Reconstruction Loss")
+    axes[1].legend()
 
-    plt.subplot(1, 3, 3)
-    plt.plot(epochs, history["train_kl"], label="Train KL")
+    axes[2].plot(epochs, history["train_kl"], label="Train KL")
     if history.get("val_kl"):
-        plt.plot(epochs, history["val_kl"], label="Val KL")
-    plt.xlabel("Epoch")
-    plt.ylabel("KL Divergence")
-    plt.tight_layout()
-    plt.show()
+        axes[2].plot(epochs, history["val_kl"], label="Val KL")
+    axes[2].set_xlabel("Epoch")
+    axes[2].set_ylabel("KL Divergence")
+    axes[2].legend()
+
+    fig.tight_layout()
+    return show_or_close(fig, save_path=save_path)
