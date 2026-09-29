@@ -14,6 +14,24 @@ import sys
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_REQUIREMENTS = os.path.join(REPO_ROOT, "requirements.txt")
 
+MIN_PYTHON = (3, 9)
+
+
+def check_python_version(minimum=MIN_PYTHON):
+    """Fail early rather than with a TypeError from `str | None` deep in a run.
+
+    The README used to claim 3.10+ while the code used PEP-604 annotations, so a
+    3.9 machine got a confusing error partway through the pipeline.
+    """
+    if sys.version_info < minimum:
+        required = ".".join(str(part) for part in minimum)
+        current = ".".join(str(part) for part in sys.version_info[:3])
+        raise SystemExit(
+            f"Python {required}+ is required (running {current}). "
+            f"Create a virtualenv with a supported interpreter and re-run."
+        )
+    return True
+
 
 def read_requirements(path=DEFAULT_REQUIREMENTS):
     """Parse a requirements file into the list of package specifiers."""
@@ -45,6 +63,7 @@ def install_dependencies(requirements_path=DEFAULT_REQUIREMENTS, dry_run=False):
 
 
 def main():
+    check_python_version()
     parser = argparse.ArgumentParser(description="Install Cow-Anomaly-Detection dependencies")
     parser.add_argument("--requirements", default=DEFAULT_REQUIREMENTS,
                         help="Path to a requirements file (default: the repo's requirements.txt)")

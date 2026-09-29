@@ -62,7 +62,7 @@ No result below is trustworthy until these land.
       `setup.py` read `requirements.txt`.
 - [x] **0.7** Drop or justify the dead deps: `pytorchvideo` and `decord` are installed but never
       imported.
-- [ ] **0.8** Fix Python version drift. README claims 3.10+; `create_yolo_dataset.py:18` and
+- [x] **0.8** Fix Python version drift. README claims 3.10+; `create_yolo_dataset.py:18` and
       `explore_dataset.py:11` use PEP-604 `str | None` annotations that break on the local 3.9.6.
 - [ ] **0.9** Add a minimal test suite. There is currently **no** `tests/`, no CI, no lint/format
       config, no `AGENTS.md`. Start with leakage tests (Phase 1) and checkpoint round-trip tests
