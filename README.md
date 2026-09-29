@@ -171,8 +171,16 @@ CONFIG = {
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.9+ (developed and tested on 3.9.6)
 - GPU recommended (CUDA, MPS, or CPU fallback)
 - ~11 GB disk for CBVD-5 dataset
 
-See `requirements.txt` or run `python scripts/setup.py`.
+`requirements.txt` is the single source of truth for dependencies and is what
+`scripts/setup.py` installs. Version-verified packages are pinned with `==`; the
+four that could not be verified locally (`torchvision`, `ultralytics`,
+`opencv-python`, `kagglehub`) carry an upper bound instead.
+
+```bash
+python scripts/setup.py          # install everything
+python scripts/setup.py --dry-run  # show what would be installed
+```
