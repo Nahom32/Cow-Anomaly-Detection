@@ -1,0 +1,30 @@
+[project]
+name = "cow-anomaly-detection"
+version = "0.1.0"
+description = "Anomaly detection in cattle behaviour from YOLO features and VAEs"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+extend-exclude = ["venv", ".venv", "notebooks", "runs", "pipeline_output"]
+
+[tool.ruff.lint]
+# E/W: pycodestyle. F: pyflakes (catches unused imports and names). I: import order.
+# B: bugbear, for the footguns that silently produce wrong results.
+select = ["E", "F", "I", "B"]
+ignore = [
+  "E501", # long lines are handled by the formatter, not the linter
+  "B008", # function call in default arg — used intentionally by loaders
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Entry points and notebooks are allowed to import heavy optional stacks lazily.
+"scripts/setup.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+filterwarnings = ["ignore::DeprecationWarning"]

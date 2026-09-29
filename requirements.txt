@@ -1,14 +1,35 @@
-decord
-kagglehub
-matplotlib
-numpy
-opencv-python
-pandas
-pytorchvideo
-pyyaml
-scikit-learn
-scipy
-torch
-torchvision
-tqdm
-ultralytics
+# Runtime dependencies — single source of truth.
+# scripts/setup.py installs exactly this file; do not add a second list.
+#
+# Pinning policy:
+#   - Packages whose resolved version is verified in the working environment are
+#     pinned with `==` so a rerun reproduces the run that produced the current
+#     pipeline_output artifacts.
+#   - Packages that could not be verified locally (no CUDA/Colab here) carry an
+#     upper bound instead of an exact pin. Tighten them once you have run the
+#     pipeline on a machine with the full stack installed, and commit the result.
+
+# --- verified against the current environment ---
+torch==2.2.2
+numpy==1.26.4
+pandas==2.3.3
+scikit-learn==1.6.1
+matplotlib==3.9.4
+pyyaml==6.0.3
+tqdm==4.70.1
+
+# --- constrained, not verified locally ---
+# torchvision is tied to torch: torch 2.2.2 pairs with torchvision 0.17.2.
+torchvision>=0.17.2,<0.18
+ultralytics>=8.1.0,<9.0.0
+opencv-python>=4.8.0,<5.0.0
+kagglehub>=0.3.0,<1.0.0
+
+# Removed (task 0.7): pytorchvideo and decord were installed but never
+# imported anywhere in scripts/ — frames are read with cv2. They are only
+# referenced by stale output cells in notebooks/, which are not executed by
+# the pipeline. Do not re-add them without a caller.
+#
+# Also dropped: scipy, which nothing imports either (it still arrives as a
+# transitive dependency of scikit-learn). tests/test_project_setup.py fails
+# if a declared requirement has no importing module.

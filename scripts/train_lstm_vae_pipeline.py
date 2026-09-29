@@ -6,9 +6,14 @@ import torch
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, SubsetRandomSampler
 
+from scripts.data.feature_cache import open_run_feature_cache
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
+from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
+from scripts.utils.hashing import hash_json
+from scripts.utils.history import save_history
+from scripts.utils.seeding import set_seed
 
 
 def main():
@@ -23,24 +28,36 @@ def main():
     EPOCHS = 50
     LR = 1e-3
     OUTPUT_DIR = "."
+    SEED = 42
 
+    set_seed(SEED)
     print(f"Using device: {DEVICE}")
+
+    config = {"model": "lstm_vae", "seed": SEED, "epochs": EPOCHS, "batch_size": BATCH_SIZE, "lr": LR,
+              "normal_action_ids": NORMAL_ACTION_IDS, "feature_layer": 9, "seq_len": SEQ_LEN,
+              "stride": STRIDE, "val_split": 0.2, "yolo_weights": YOLO_MODEL_PATH}
+    manifest = RunManifest.create(OUTPUT_DIR, config, seed=SEED, device=DEVICE)
+    manifest.record_artifact("yolo_weights", YOLO_MODEL_PATH)
+    manifest.record_artifact("annotations_csv", ANNOTATIONS_CSV)
 
     df = pd.read_csv(ANNOTATIONS_CSV, header=None, dtype={0: str})
     df.columns = ["video_id", "timestamp", "x1", "y1", "x2", "y2", "action_id", "target_id"]
 
     print("Loading YOLO feature extractor...")
     feature_extractor, hook = create_feature_extractor(YOLO_MODEL_PATH, layer_index=9, device=DEVICE)
+    feature_cache = open_run_feature_cache(OUTPUT_DIR, YOLO_MODEL_PATH, layer_index=9)
 
     print("Building sequence dataset...")
     seq_dataset = CowSequenceDataset(
         df=df,
         frames_dir=FRAMES_DIR,
         feature_extractor=feature_extractor,
+        feature_cache=feature_cache,
         seq_len=SEQ_LEN,
         stride=STRIDE,
         normal_action_ids=NORMAL_ACTION_IDS,
         device=DEVICE,
+        seed=SEED,
     )
     print(f"Total sequences: {len(seq_dataset)}")
 
@@ -59,20 +76,24 @@ def main():
         df=df,
         frames_dir=FRAMES_DIR,
         feature_extractor=feature_extractor,
+        feature_cache=feature_cache,
         seq_len=SEQ_LEN,
         stride=STRIDE,
         normal_action_ids=NORMAL_ACTION_IDS,
         device=DEVICE,
+        seed=SEED,
     )
 
     video_ids = list(set(key[0] for key in seq_dataset.tracks.keys()))
-    train_vids, val_vids = train_test_split(video_ids, test_size=0.2, random_state=42)
+    train_vids, val_vids = train_test_split(video_ids, test_size=0.2, random_state=SEED)
 
     train_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in train_vids]
     val_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in val_vids]
 
-    train_loader = DataLoader(norm_dataset, batch_size=BATCH_SIZE, sampler=SubsetRandomSampler(train_indices))
-    val_loader = DataLoader(norm_dataset, batch_size=BATCH_SIZE, sampler=SubsetRandomSampler(val_indices))
+    train_generator = torch.Generator().manual_seed(SEED)
+    val_generator = torch.Generator().manual_seed(SEED)
+    train_loader = DataLoader(norm_dataset, batch_size=BATCH_SIZE, sampler=SubsetRandomSampler(train_indices, generator=train_generator))
+    val_loader = DataLoader(norm_dataset, batch_size=BATCH_SIZE, sampler=SubsetRandomSampler(val_indices, generator=val_generator))
 
     vae = LSTMVAE(input_dim=256, hidden_dim=128, latent_dim=32, num_layers=1)
 
@@ -80,8 +101,17 @@ def main():
     history = train_lstm_vae(vae, train_loader, val_loader, epochs=EPOCHS, lr=LR, device=DEVICE)
 
     torch.save(vae.state_dict(), os.path.join(OUTPUT_DIR, "lstm_vae_anomaly.pth"))
+    save_history(history, os.path.join(OUTPUT_DIR, "lstm_vae_training_history.csv"))
     np.save(os.path.join(OUTPUT_DIR, "feature_mean.npy"), mean)
     np.save(os.path.join(OUTPUT_DIR, "feature_std.npy"), std)
+
+    manifest.record_split("lstm_vae_videos", {"train": train_vids, "val": val_vids})
+    manifest.record_array("lstm_vae_feature_mean", mean)
+    manifest.record_array("lstm_vae_feature_std", std)
+    manifest.record_step("lstm_vae", config_hash=hash_json(config), n_sequences=len(seq_dataset),
+                         n_train=len(train_indices), n_val=len(val_indices), n_videos=len(video_ids))
+    manifest.save()
+    print(f"Manifest: {manifest.path}")
 
     hook.remove()
     print("Done.")

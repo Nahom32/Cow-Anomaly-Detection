@@ -4,10 +4,48 @@ CONFIG = {
     "val_split": 0.2,
     "random_seed": 42,
 
-    # YOLO training
-    "yolo_epochs": 150,
-    "yolo_imgsz": 640,
-    "yolo_batch": 16,
+    # YOLO training. Nested because there are two dozen of them; a config key
+    # that no entry point reads is a lie, so the trainers take this dict as-is.
+    "yolo": {
+        "model": "yolo26n.pt",
+        "epochs": 150,
+        "imgsz": 640,
+        "batch": 16,
+        "patience": 50,
+        "lr0": 0.01,
+        "lrf": 0.01,
+        "momentum": 0.937,
+        "weight_decay": 0.0005,
+        "warmup_epochs": 3,
+        "warmup_momentum": 0.8,
+        "box": 7.5,
+        "cls": 0.5,
+        "dfl": 1.5,
+        # Augmentation
+        "hsv_h": 0.02,
+        "hsv_s": 0.8,
+        "hsv_v": 0.4,
+        "degrees": 10.0,
+        "translate": 0.2,
+        "scale": 0.5,
+        "shear": 0.0,
+        "perspective": 0.0,
+        "flipud": 0.0,
+        "fliplr": 0.5,
+        "mosaic": 1.0,
+        # Runtime
+        "optimizer": "auto",
+        "device": 0,
+        "workers": 4,
+        "project": "cow_detector",
+        "name": "yolo26n_cbvd",
+        "exist_ok": True,
+        "verbose": True,
+    },
+
+    # Feature extraction
+    "feature_layer": 9,  # SPPF layer hooked for feature extraction
+    "feature_input_size": 224,
 
     # Flat VAE
     "vae_epochs": 50,

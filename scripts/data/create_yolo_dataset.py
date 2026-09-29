@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import shutil
 from collections import defaultdict
@@ -7,7 +9,9 @@ import pandas as pd
 from sklearn.model_selection import GroupShuffleSplit
 from tqdm import tqdm
 
+from scripts.config import CONFIG
 from scripts.data.download_dataset import download_dataset
+from scripts.utils.seeding import set_seed
 
 
 def create_yolo_dataset(
@@ -99,4 +103,5 @@ def create_yolo_dataset(
 
 
 if __name__ == "__main__":
-    create_yolo_dataset()
+    set_seed(CONFIG["random_seed"])
+    create_yolo_dataset(random_seed=CONFIG["random_seed"])

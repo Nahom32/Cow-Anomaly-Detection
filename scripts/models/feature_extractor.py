@@ -1,11 +1,22 @@
-import cv2
-import numpy as np
 import torch
-import torchvision.transforms as transforms
-from ultralytics import YOLO
+
+DEFAULT_INPUT_SIZE = 224
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
-def extract_cow_features(img, bbox, feature_extractor, device="cuda", normalize=True):
+def extract_cow_features(img, bbox, feature_extractor, device="cuda", normalize=True, input_size=DEFAULT_INPUT_SIZE):
+    """Crop `bbox` out of `img` and return the hooked feature vector.
+
+    cv2 / torchvision are imported here rather than at module scope so that the
+    caching and pipeline-orchestration logic stays importable on a box without
+    the vision stack; the import cost is a sys.modules hit next to a forward pass.
+    `input_size` is threaded through instead of hardcoded because the feature
+    cache is keyed on it — a hardcoded resize would make the cache key lie.
+    """
+    import cv2
+    import torchvision.transforms as transforms
+
     x1_orig, y1_orig, x2_orig, y2_orig = bbox
 
     h, w = img.shape[:2]
@@ -41,13 +52,13 @@ def extract_cow_features(img, bbox, feature_extractor, device="cuda", normalize=
     if crop.size == 0:
         return None
 
-    crop = cv2.resize(crop, (224, 224))
+    crop = cv2.resize(crop, (input_size, input_size))
     crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
 
     transform_list = [transforms.ToTensor()]
     if normalize:
         transform_list.append(
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
         )
     transform = transforms.Compose(transform_list)
     input_tensor = transform(crop_rgb).unsqueeze(0).to(device)
@@ -65,6 +76,8 @@ def extract_cow_features(img, bbox, feature_extractor, device="cuda", normalize=
 
 
 def create_feature_extractor(yolo_model_path, layer_index=9, device="cuda"):
+    from ultralytics import YOLO
+
     model = YOLO(yolo_model_path)
     pt_model = model.model
     pt_model.to(device)
