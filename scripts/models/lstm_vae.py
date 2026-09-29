@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from scripts.utils.history import empty_history
+
 
 class LSTMVAE(nn.Module):
     def __init__(self, input_dim=256, hidden_dim=128, latent_dim=32, num_layers=1):
@@ -53,34 +55,46 @@ def lstm_vae_loss(recon, x, mu, logvar, reduction="sum"):
 def train_lstm_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"):
     vae.to(device)
     optimizer = torch.optim.Adam(vae.parameters(), lr=lr)
-    history = {"epoch": [], "train_loss": [], "val_loss": []}
+    history = empty_history()
 
     for epoch in range(1, epochs + 1):
         vae.train()
-        total_loss = 0.0
+        train_loss, train_recon, train_kl = 0.0, 0.0, 0.0
         for batch in train_loader:
             x = batch.to(device) if not isinstance(batch, (list, tuple)) else batch[0].to(device)
             optimizer.zero_grad()
             recon, mu, logvar = vae(x)
-            loss, _, _ = lstm_vae_loss(recon, x, mu, logvar, reduction="sum")
+            loss, recon_loss, kl_loss = lstm_vae_loss(recon, x, mu, logvar, reduction="sum")
             loss.backward()
             optimizer.step()
-            total_loss += loss.item()
-        avg_train_loss = total_loss / len(train_loader.dataset)
+            train_loss += loss.item()
+            train_recon += recon_loss.item()
+            train_kl += kl_loss.item()
+        avg_train_loss = train_loss / len(train_loader.dataset)
+        avg_train_recon = train_recon / len(train_loader.dataset)
+        avg_train_kl = train_kl / len(train_loader.dataset)
 
         vae.eval()
-        val_loss = 0.0
+        val_loss, val_recon, val_kl = 0.0, 0.0, 0.0
         with torch.no_grad():
             for batch in val_loader:
                 x = batch.to(device) if not isinstance(batch, (list, tuple)) else batch[0].to(device)
                 recon, mu, logvar = vae(x)
-                loss, _, _ = lstm_vae_loss(recon, x, mu, logvar, reduction="sum")
+                loss, recon_loss, kl_loss = lstm_vae_loss(recon, x, mu, logvar, reduction="sum")
                 val_loss += loss.item()
+                val_recon += recon_loss.item()
+                val_kl += kl_loss.item()
         avg_val_loss = val_loss / len(val_loader.dataset)
+        avg_val_recon = val_recon / len(val_loader.dataset)
+        avg_val_kl = val_kl / len(val_loader.dataset)
 
         history["epoch"].append(epoch)
         history["train_loss"].append(avg_train_loss)
+        history["train_recon"].append(avg_train_recon)
+        history["train_kl"].append(avg_train_kl)
         history["val_loss"].append(avg_val_loss)
+        history["val_recon"].append(avg_val_recon)
+        history["val_kl"].append(avg_val_kl)
         print(f"Epoch {epoch:3d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
 
     return history

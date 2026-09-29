@@ -9,7 +9,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from scripts.data.build_features import build_feature_dataset, normalize_features
 from scripts.data.feature_cache import open_run_feature_cache
 from scripts.models.feature_extractor import create_feature_extractor
-from scripts.models.vae import VAE, plot_history, save_history, train_vae
+from scripts.models.vae import VAE, plot_history, train_vae
+from scripts.utils.history import save_history
 from scripts.utils.seeding import set_seed
 
 

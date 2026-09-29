@@ -10,6 +10,7 @@ from scripts.data.feature_cache import open_run_feature_cache
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
+from scripts.utils.history import save_history
 from scripts.utils.seeding import set_seed
 
 
@@ -91,6 +92,7 @@ def main():
     history = train_lstm_vae(vae, train_loader, val_loader, epochs=EPOCHS, lr=LR, device=DEVICE)
 
     torch.save(vae.state_dict(), os.path.join(OUTPUT_DIR, "lstm_vae_anomaly.pth"))
+    save_history(history, os.path.join(OUTPUT_DIR, "lstm_vae_training_history.csv"))
     np.save(os.path.join(OUTPUT_DIR, "feature_mean.npy"), mean)
     np.save(os.path.join(OUTPUT_DIR, "feature_std.npy"), std)
 

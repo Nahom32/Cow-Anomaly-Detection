@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import pandas as pd
 import matplotlib.pyplot as plt
+
+from scripts.utils.history import empty_history
 
 
 class VAE(nn.Module):
@@ -55,15 +56,7 @@ def train_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"):
     vae.to(device)
     optimizer = torch.optim.Adam(vae.parameters(), lr=lr)
 
-    history = {
-        "epoch": [],
-        "train_loss": [],
-        "train_recon": [],
-        "train_kl": [],
-        "val_loss": [],
-        "val_recon": [],
-        "val_kl": [],
-    }
+    history = empty_history()
 
     for epoch in range(1, epochs + 1):
         vae.train()
@@ -105,10 +98,6 @@ def train_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"):
             print(f"Epoch {epoch:3d} | Train Loss: {history['train_loss'][-1]:.4f}")
 
     return history
-
-
-def save_history(history, filename="training_history.csv"):
-    pd.DataFrame(history).to_csv(filename, index=False)
 
 
 def plot_history(history):

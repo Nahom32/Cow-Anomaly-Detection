@@ -20,7 +20,8 @@ from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDa
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
 from scripts.models.train_yolo_n import train_yolo26n
-from scripts.models.vae import VAE, plot_history, save_history, train_vae
+from scripts.models.vae import VAE, plot_history, train_vae
+from scripts.utils.history import save_history
 from scripts.utils.seeding import set_seed
 
 
@@ -246,6 +247,7 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
     )
 
     torch.save(vae.state_dict(), os.path.join(output_dir, "lstm_vae_model.pth"))
+    save_history(history, os.path.join(output_dir, "lstm_vae_history.csv"))
     np.save(os.path.join(output_dir, "lstm_vae_feature_mean.npy"), mean)
     np.save(os.path.join(output_dir, "lstm_vae_feature_std.npy"), std)
     print("LSTM-VAE complete.")
