@@ -27,7 +27,6 @@ scripts/
 │   ├── create_yolo_dataset.py       # Convert AVA annotations → YOLO-format dataset
 │   └── build_features.py            # Extract frame-level features using YOLO backbone
 ├── dataset/
-│   ├── anomaly_dataset.py           # PyTorch Dataset for normal/anomaly video clips
 │   └── sequence_dataset.py          # PyTorch Dataset for temporal sequences (LSTM-VAE input)
 └── models/
     ├── feature_extractor.py         # YOLO forward hook at SPPF layer + cow crop feature extraction

@@ -71,9 +71,15 @@ No result below is trustworthy until these land.
       hash, split manifest hash. `is_step_done` (`run_full_pipeline.py:248-263`) is
       **existence-only**, so a model trained before a config change is silently reused. Resolved
       properly by 3.9.
-- [ ] **0.11** Scope `scripts/dataset/anomaly_dataset.py` — `CowDatasetHybrid` is **dead code**
+- [x] **0.11** Scope `scripts/dataset/anomaly_dataset.py` — `CowDatasetHybrid` is **dead code**
       (never imported). It has a label off-by-one (`:26,29` uses `[c+1]`, inconsistent with the
       `[0,1,2]` used everywhere) and nondeterministic pseudo-anomaly sampling (`:89`).
+      **Deleted** (never imported by any entry point; a copy survives in
+      `notebooks/Cow_Localization_and_Anomaly_Detection.ipynb` for reference). Its
+      `df.sample(1)` pairing was unfixable as written — it paired a normal clip with a
+      *random* anomaly clip, so it was never a usable negative-pair dataset. Phase 2 needs
+      evaluation-time pairing over cached features instead (see 2.1); do not resurrect this
+      file, or the `[c+1]` label shift and the unseeded sample come back with it.
 
 ---
 
