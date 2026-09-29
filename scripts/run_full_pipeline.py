@@ -25,7 +25,6 @@ from scripts.utils.history import save_history
 from scripts.utils.plotting import setup_matplotlib
 from scripts.utils.seeding import set_seed
 
-
 DEFAULT_OUTPUT_DIR = "pipeline_output"
 STATE_FILE = ".pipeline_state.json"
 

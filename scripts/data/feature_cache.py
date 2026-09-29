@@ -121,10 +121,18 @@ class FeatureCache:
             f"features_{str(signature['weights_sha256'])[:16]}"
             f"_layer{signature['layer_index']}_{signature['input_size']}"
         )
-        self.features_path = os.path.join(directory, f"{stem}.npy")
-        self.keys_path = os.path.join(directory, f"{stem}_keys.npy")
-        self.valid_path = os.path.join(directory, f"{stem}_valid.npy")
-        self.meta_path = os.path.join(directory, f"{stem}_meta.json")
+        if directory is None:
+            # In-memory only: `ensure` still extracts each key once, but nothing
+            # is persisted and no paths exist.
+            self.features_path = None
+            self.keys_path = None
+            self.valid_path = None
+            self.meta_path = None
+        else:
+            self.features_path = os.path.join(directory, f"{stem}.npy")
+            self.keys_path = os.path.join(directory, f"{stem}_keys.npy")
+            self.valid_path = os.path.join(directory, f"{stem}_valid.npy")
+            self.meta_path = os.path.join(directory, f"{stem}_meta.json")
         self.signature_hash = hash_json(self.signature)
 
         self._index = {}
@@ -139,7 +147,7 @@ class FeatureCache:
         if self._loaded:
             return self
         self._loaded = True
-        if not os.path.isfile(self.meta_path):
+        if self.directory is None or not os.path.isfile(self.meta_path):
             return self
         try:
             with open(self.meta_path) as f:
@@ -238,7 +246,7 @@ class FeatureCache:
 
             new_features = np.zeros((len(unknown), dim), dtype=np.float32)
             new_valid = np.zeros(len(unknown), dtype=bool)
-            for i, (key, feat) in enumerate(zip(unknown, extracted)):
+            for i, feat in enumerate(extracted):
                 if feat is None:
                     continue
                 new_features[i] = np.asarray(feat, dtype=np.float32).ravel()

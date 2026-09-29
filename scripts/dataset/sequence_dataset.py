@@ -57,7 +57,7 @@ class CowSequenceDataset(Dataset):
         self.normal_action_ids = set(normal_action_ids or [])
 
         self.tracks = defaultdict(list)
-        for idx, row in df.iterrows():
+        for _, row in df.iterrows():
             if self.normal_action_ids and row["action_id"] not in self.normal_action_ids:
                 continue
             key = (str(row["video_id"]), row["target_id"])
@@ -176,8 +176,8 @@ class NormalisedSeqDataset(CowSequenceDataset):
 
     def __init__(self, mean, std, **kwargs):
         super().__init__(**kwargs)
-        self.mean = torch.tensor(mean, dtype=torch.float32)
-        self.std = torch.tensor(std, dtype=torch.float32)
+        self.mean = torch.as_tensor(mean, dtype=torch.float32)
+        self.std = torch.as_tensor(std, dtype=torch.float32)
 
     def __getitem__(self, idx):
         seq = super().__getitem__(idx)

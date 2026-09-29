@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import os
 
-import numpy as np
 import pandas as pd
-from pathlib import Path
-from tqdm import tqdm
 
 from scripts.config import CONFIG
 from scripts.data.download_dataset import download_dataset
@@ -16,8 +13,8 @@ def explore_dataset(data_root: str | None = None):
     if data_root is None:
         data_root = download_dataset()
 
-    print(f"\nDataset structure preview:")
-    for root, dirs, files in os.walk(data_root):
+    print("\nDataset structure preview:")
+    for root, _dirs, files in os.walk(data_root):
         if files:
             rel = os.path.relpath(root, data_root)
             print(f"  {rel}/  -> {len(files)} files (first 3: {files[:3]})")

@@ -1,7 +1,7 @@
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
 
 from scripts.utils.history import empty_history
 from scripts.utils.plotting import setup_matplotlib, show_or_close

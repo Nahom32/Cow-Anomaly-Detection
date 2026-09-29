@@ -13,7 +13,6 @@
 torch==2.2.2
 numpy==1.26.4
 pandas==2.3.3
-scipy==1.13.1
 scikit-learn==1.6.1
 matplotlib==3.9.4
 pyyaml==6.0.3
@@ -30,3 +29,7 @@ kagglehub>=0.3.0,<1.0.0
 # imported anywhere in scripts/ — frames are read with cv2. They are only
 # referenced by stale output cells in notebooks/, which are not executed by
 # the pipeline. Do not re-add them without a caller.
+#
+# Also dropped: scipy, which nothing imports either (it still arrives as a
+# transitive dependency of scikit-learn). tests/test_project_setup.py fails
+# if a declared requirement has no importing module.

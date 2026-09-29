@@ -169,6 +169,26 @@ CONFIG = {
 }
 ```
 
+## Development
+
+```bash
+python scripts/setup.py --dry-run   # show what would be installed
+pip install -r requirements-dev.txt # runtime deps + pytest + ruff
+```
+
+```bash
+ruff check scripts tests            # lint
+pytest -q                           # ~4s, no vision stack required
+pytest tests/test_pipeline_wiring.py  # entry-point wiring; skipped without cv2/ultralytics
+```
+
+The test suite deliberately avoids cv2 / torchvision / ultralytics so it runs on
+a CPU-only machine: feature extraction is injected as a callable, and the caching,
+dataset and determinism logic is exercised directly.
+
+See `AGENTS.md` for the working conventions and the current state of the
+project, and `tasklist.md` for the plan.
+
 ## Requirements
 
 - Python 3.9+ (developed and tested on 3.9.6)
