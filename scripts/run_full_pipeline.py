@@ -20,6 +20,7 @@ from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
 from scripts.models.train_yolo_n import train_yolo26n
 from scripts.models.vae import VAE, plot_history, save_history, train_vae
+from scripts.utils.seeding import set_seed
 
 
 DEFAULT_OUTPUT_DIR = "pipeline_output"
@@ -114,7 +115,7 @@ def step_train_yolo(data_yaml, output_dir, config):
     print("\n" + "=" * 60)
     print("STEP 4: Training YOLO26n")
     print("=" * 60)
-    train_yolo26n(data_yaml=data_yaml)
+    train_yolo26n(data_yaml=data_yaml, seed=config["random_seed"])
     yolo_weights = find_best_pt()
     if not yolo_weights:
         raise FileNotFoundError(
@@ -158,6 +159,7 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     train_loader = DataLoader(
         TensorDataset(torch.tensor(X_train, dtype=torch.float32)),
         batch_size=config["vae_batch_size"], shuffle=True,
+        generator=torch.Generator().manual_seed(config["random_seed"]),
     )
     val_loader = DataLoader(
         TensorDataset(torch.tensor(X_val, dtype=torch.float32)),
@@ -222,8 +224,8 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
     train_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in train_vids]
     val_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in val_vids]
 
-    train_loader = DataLoader(norm_dataset, batch_size=config["lstm_vae_batch_size"], sampler=SubsetRandomSampler(train_indices))
-    val_loader = DataLoader(norm_dataset, batch_size=config["lstm_vae_batch_size"], sampler=SubsetRandomSampler(val_indices))
+    train_loader = DataLoader(norm_dataset, batch_size=config["lstm_vae_batch_size"], sampler=SubsetRandomSampler(train_indices, generator=torch.Generator().manual_seed(config["random_seed"])))
+    val_loader = DataLoader(norm_dataset, batch_size=config["lstm_vae_batch_size"], sampler=SubsetRandomSampler(val_indices, generator=torch.Generator().manual_seed(config["random_seed"])))
 
     vae = LSTMVAE(
         input_dim=256,
@@ -271,14 +273,20 @@ def main():
     parser.add_argument("--from-step", type=int, default=1, choices=range(1, 8),
                         help="Force re-run from this step onwards (1-7), ignoring prior state")
     parser.add_argument("--force", action="store_true", help="Re-run all steps, ignoring prior state")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Override CONFIG['random_seed']")
     args = parser.parse_args()
 
     output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
     device = get_device()
     config = CONFIG.copy()
+    if args.seed is not None:
+        config["random_seed"] = args.seed
+    seed = set_seed(config["random_seed"])
 
     print(f"Device:  {device}")
+    print(f"Seed:    {seed}")
     print(f"Output:  {os.path.abspath(output_dir)}")
 
     state = load_state(output_dir)

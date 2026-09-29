@@ -5,7 +5,9 @@ import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
 
+from scripts.config import CONFIG
 from scripts.data.download_dataset import download_dataset
+from scripts.utils.seeding import set_seed
 
 
 def explore_dataset(data_root: str | None = None):
@@ -45,4 +47,5 @@ def explore_dataset(data_root: str | None = None):
 
 
 if __name__ == "__main__":
+    set_seed(CONFIG["random_seed"])
     explore_dataset()

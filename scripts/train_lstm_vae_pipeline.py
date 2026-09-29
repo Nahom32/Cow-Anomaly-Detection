@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader, SubsetRandomSampler
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
+from scripts.utils.seeding import set_seed
 
 
 def main():
@@ -23,7 +24,9 @@ def main():
     EPOCHS = 50
     LR = 1e-3
     OUTPUT_DIR = "."
+    SEED = 42
 
+    set_seed(SEED)
     print(f"Using device: {DEVICE}")
 
     df = pd.read_csv(ANNOTATIONS_CSV, header=None, dtype={0: str})
@@ -66,13 +69,15 @@ def main():
     )
 
     video_ids = list(set(key[0] for key in seq_dataset.tracks.keys()))
-    train_vids, val_vids = train_test_split(video_ids, test_size=0.2, random_state=42)
+    train_vids, val_vids = train_test_split(video_ids, test_size=0.2, random_state=SEED)
 
     train_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in train_vids]
     val_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in val_vids]
 
-    train_loader = DataLoader(norm_dataset, batch_size=BATCH_SIZE, sampler=SubsetRandomSampler(train_indices))
-    val_loader = DataLoader(norm_dataset, batch_size=BATCH_SIZE, sampler=SubsetRandomSampler(val_indices))
+    train_generator = torch.Generator().manual_seed(SEED)
+    val_generator = torch.Generator().manual_seed(SEED)
+    train_loader = DataLoader(norm_dataset, batch_size=BATCH_SIZE, sampler=SubsetRandomSampler(train_indices, generator=train_generator))
+    val_loader = DataLoader(norm_dataset, batch_size=BATCH_SIZE, sampler=SubsetRandomSampler(val_indices, generator=val_generator))
 
     vae = LSTMVAE(input_dim=256, hidden_dim=128, latent_dim=32, num_layers=1)
 

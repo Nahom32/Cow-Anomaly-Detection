@@ -1,10 +1,14 @@
 from ultralytics import YOLO
 
+from scripts.utils.seeding import set_seed
 
-def train_yolo26n(data_yaml: str = "/content/cow_detection_fixed.yaml"):
+
+def train_yolo26n(data_yaml: str = "/content/cow_detection_fixed.yaml", seed: int = 42):
+    set_seed(seed)
     model = YOLO("yolo26n.pt")
     results = model.train(
         data=data_yaml,
+        seed=seed,
         epochs=150,
         imgsz=640,
         batch=16,

@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from scripts.data.build_features import build_feature_dataset, normalize_features
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.vae import VAE, plot_history, save_history, train_vae
+from scripts.utils.seeding import set_seed
 
 
 def main():
@@ -21,7 +22,9 @@ def main():
     BATCH_SIZE = 64
     LR = 1e-3
     OUTPUT_DIR = "."
+    SEED = 42
 
+    set_seed(SEED)
     print(f"Using device: {DEVICE}")
 
     print("Loading annotations...")
@@ -41,10 +44,11 @@ def main():
     print("Normalizing features...")
     features, min_val, max_val = normalize_features(features)
 
-    X_train, X_val = train_test_split(features, test_size=0.2, random_state=42)
+    X_train, X_val = train_test_split(features, test_size=0.2, random_state=SEED)
     train_loader = DataLoader(
         TensorDataset(torch.tensor(X_train, dtype=torch.float32)),
         batch_size=BATCH_SIZE, shuffle=True,
+        generator=torch.Generator().manual_seed(SEED),
     )
     val_loader = DataLoader(
         TensorDataset(torch.tensor(X_val, dtype=torch.float32)),
