@@ -13,10 +13,11 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, SubsetRandomSampler, TensorDataset
 
 from scripts.config import CONFIG
-from scripts.data.build_features import build_feature_dataset, normalize_features
+from scripts.data.build_features import build_feature_dataset
 from scripts.data.create_yolo_dataset import create_yolo_dataset
 from scripts.data.download_dataset import download_dataset
 from scripts.data.feature_cache import open_run_feature_cache
+from scripts.data.normalize import MinMaxNormalizer
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
 from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
@@ -165,16 +166,21 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     )
     print(f"Extracted {features.shape[0]} features, dim={features.shape[1]}")
 
-    features_norm, min_val, max_val = normalize_features(features)
-
     # Split the *indices*, not the rows, so the assignment can be hashed into the
     # manifest. train_test_split permutes identically either way, so this is the
     # same split as before — but now it is auditable. It is still a random row
     # split and therefore still leaks; Phase 1.3 replaces it.
-    all_idx = np.arange(features_norm.shape[0])
+    all_idx = np.arange(features.shape[0])
     train_idx, val_idx = train_test_split(
         all_idx, test_size=config["val_split"], random_state=config["random_seed"]
     )
+
+    # Fit the normalizer on the training rows only (1.1). Fitting on `features`
+    # normalized every val sample using its own extremes, which is the leak
+    # `1.8` asserts against. Val features outside the train range now map outside
+    # [0, 1] rather than being rescaled to hide it.
+    normalizer = MinMaxNormalizer().fit(features[train_idx])
+    features_norm = normalizer.transform(features)
     X_train, X_val = features_norm[train_idx], features_norm[val_idx]
     train_loader = DataLoader(
         TensorDataset(torch.tensor(X_train, dtype=torch.float32)),
@@ -191,14 +197,16 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
 
     save_history(history, os.path.join(output_dir, "flat_vae_history.csv"))
     torch.save(vae.state_dict(), os.path.join(output_dir, "flat_vae_model.pth"))
-    np.save(os.path.join(output_dir, "flat_vae_feature_min.npy"), min_val)
-    np.save(os.path.join(output_dir, "flat_vae_feature_max.npy"), max_val)
+    np.save(os.path.join(output_dir, "flat_vae_feature_min.npy"), normalizer.min_)
+    np.save(os.path.join(output_dir, "flat_vae_feature_max.npy"), normalizer.max_)
     plot_history(history, save_path=os.path.join(output_dir, "flat_vae_history.png"), headless=headless)
     if manifest is not None:
         manifest.record_array("flat_vae_features", features, n=features.shape[0], dim=features.shape[1])
         manifest.record_array("flat_vae_features_norm", features_norm)
         manifest.record_array("flat_vae_train_rows", features_norm[train_idx])
         manifest.record_array("flat_vae_val_rows", features_norm[val_idx])
+        manifest.record_array("flat_vae_feature_min", normalizer.min_)
+        manifest.record_array("flat_vae_feature_max", normalizer.max_)
         manifest.record_split("flat_vae_rows", {"train": sorted(train_idx.tolist()), "val": sorted(val_idx.tolist())})
         manifest.record_step(
             6,
@@ -206,6 +214,7 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
             n_features=int(features.shape[0]),
             n_train=int(X_train.shape[0]),
             n_val=int(X_val.shape[0]),
+            normalizer_fit_on="train",
             weights_sha256=(manifest.data.get("artifacts", {}).get("yolo_weights", {}) or {}).get("sha256"),
         )
     print("Flat VAE complete.")

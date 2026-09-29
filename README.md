@@ -25,7 +25,9 @@ scripts/
 │   ├── download_dataset.py          # Download CBVD-5 dataset from Kaggle
 │   ├── explore_dataset.py           # Dataset inspection and statistics
 │   ├── create_yolo_dataset.py       # Convert AVA annotations → YOLO-format dataset
-│   └── build_features.py            # Extract frame-level features using YOLO backbone
+│   ├── build_features.py            # Extract frame-level features using YOLO backbone
+│   ├── feature_cache.py             # On-disk feature cache keyed by the YOLO weights hash
+│   └── normalize.py                 # MinMaxNormalizer: fit on train, transform anything
 ├── dataset/
 │   └── sequence_dataset.py          # PyTorch Dataset for temporal sequences (LSTM-VAE input)
 └── models/
@@ -81,7 +83,7 @@ python -m scripts.run_full_pipeline --force
 | 3 | Generate `data.yaml` for YOLO training |
 | 4 | Train YOLO26n (150 epochs) → produces `best.pt` weights |
 | 5 | Create feature extractor from trained YOLO backbone (SPPF layer 9) |
-| 6 | Flat VAE: extract frame features → min-max normalise → train → save model |
+| 6 | Flat VAE: extract frame features → split → min-max normalise (train-fitted) → train → save model |
 | 7 | LSTM-VAE: build temporal sequences → z-score normalise → train → save model |
 
 ### Pipeline outputs
@@ -94,13 +96,19 @@ All artifacts are saved to `pipeline_output/`:
 | `feature_cache/` | Cached backbone features keyed by the YOLO weights hash (see below) |
 | `flat_vae_model.pth` | Trained flat VAE state dict |
 | `flat_vae_history.csv` | Training loss history |
-| `flat_vae_feature_min.npy` | Min values for feature normalisation |
-| `flat_vae_feature_max.npy` | Max values for feature normalisation |
+| `flat_vae_feature_min.npy` | Per-feature min, fitted on the train split only |
+| `flat_vae_feature_max.npy` | Per-feature max, fitted on the train split only |
 | `lstm_vae_model.pth` | Trained LSTM-VAE state dict |
 | `lstm_vae_history.csv` | Training loss history (recon and KL logged separately) |
 | `lstm_vae_feature_mean.npy` | Mean values for feature normalisation |
 | `lstm_vae_feature_std.npy` | Std values for feature normalisation |
 | `run_manifest.json` | Provenance for the run: git SHA, config hash, seed, feature hashes |
+
+> **Still leaking.** The flat VAE's min/max is now fitted on the training rows
+> only. The LSTM-VAE's mean/std is still computed over *every* sequence in the
+> run, and both models still split at frame/video level rather than by cow
+> identity. See `tasklist.md` tasks 1.2–1.4. Numbers from this pipeline are not
+> yet publishable.
 
 ### Run manifest
 

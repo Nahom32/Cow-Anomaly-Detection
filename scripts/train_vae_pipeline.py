@@ -6,8 +6,9 @@ import torch
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 
-from scripts.data.build_features import build_feature_dataset, normalize_features
+from scripts.data.build_features import build_feature_dataset
 from scripts.data.feature_cache import open_run_feature_cache
+from scripts.data.normalize import MinMaxNormalizer
 from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.vae import VAE, plot_history, train_vae
@@ -54,10 +55,14 @@ def main():
     )
     print(f"Extracted {features.shape[0]} feature vectors of dimension {features.shape[1]}")
 
-    print("Normalizing features...")
-    features, min_val, max_val = normalize_features(features)
-
-    X_train, X_val = train_test_split(features, test_size=0.2, random_state=SEED)
+    print("Splitting rows, then fitting normalisation on the training rows only...")
+    all_idx = np.arange(features.shape[0])
+    train_idx, val_idx = train_test_split(all_idx, test_size=0.2, random_state=SEED)
+    # Fit after the split: min/max over the whole matrix normalizes each val
+    # sample with its own extremes (1.1).
+    normalizer = MinMaxNormalizer().fit(features[train_idx])
+    features_norm = normalizer.transform(features)
+    X_train, X_val = features_norm[train_idx], features_norm[val_idx]
     train_loader = DataLoader(
         TensorDataset(torch.tensor(X_train, dtype=torch.float32)),
         batch_size=BATCH_SIZE, shuffle=True,
@@ -76,15 +81,21 @@ def main():
 
     save_history(history, os.path.join(OUTPUT_DIR, "vae_training_history.csv"))
     torch.save(vae.state_dict(), os.path.join(OUTPUT_DIR, "vae_anomaly_model.pth"))
-    np.save(os.path.join(OUTPUT_DIR, "feature_min.npy"), min_val)
-    np.save(os.path.join(OUTPUT_DIR, "feature_max.npy"), max_val)
+    np.save(os.path.join(OUTPUT_DIR, "feature_min.npy"), normalizer.min_)
+    np.save(os.path.join(OUTPUT_DIR, "feature_max.npy"), normalizer.max_)
 
     plot_history(history, save_path=os.path.join(OUTPUT_DIR, "vae_training_history.png"))
 
     manifest.record_array("flat_vae_features", features, n=features.shape[0], dim=features.shape[1])
+    manifest.record_array("flat_vae_features_norm", features_norm)
     manifest.record_array("flat_vae_train_rows", X_train)
     manifest.record_array("flat_vae_val_rows", X_val)
-    manifest.record_step("flat_vae", config_hash=hash_json(config), n_features=int(features.shape[0]))
+    manifest.record_array("flat_vae_feature_min", normalizer.min_)
+    manifest.record_array("flat_vae_feature_max", normalizer.max_)
+    manifest.record_split("flat_vae_rows", {"train": sorted(train_idx.tolist()), "val": sorted(val_idx.tolist())})
+    manifest.record_step("flat_vae", config_hash=hash_json(config), n_features=int(features.shape[0]),
+                         n_train=int(X_train.shape[0]), n_val=int(X_val.shape[0]),
+                         normalizer_fit_on="train")
     manifest.save()
     print(f"Manifest: {manifest.path}")
 

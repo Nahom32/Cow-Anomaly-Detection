@@ -18,11 +18,13 @@ later phase from re-introducing a bug an earlier one fixed.
 
 ## Current state
 
-Phase 0 (foundations & reproducibility) is implemented. Phases 1+ are not. In
-particular: **there is still no evaluation code, no anomaly-score function, no
-test split and no train/val/test protocol**, and normalisation still leaks
-statistics from validation into training (tasks 1.1, 1.2). No number produced by
-this repo is publishable until Phase 1 lands.
+Phase 0 (foundations & reproducibility) and task 1.1 (flat-VAE normalization is
+fitted on train only) are implemented. The rest of Phase 1 is not. In particular:
+**there is still no evaluation code, no anomaly-score function, no test split and
+no train/val/test protocol**, the LSTM-VAE z-score still leaks (task 1.2), and
+the split is still at frame level, so adjacent frames of one cow land on both
+sides (tasks 1.3, 1.4). No number produced by this repo is publishable until
+Phase 1 lands.
 
 ## Commands
 
@@ -49,7 +51,8 @@ scripts/
 ├── config.py            every hyperparameter; nothing hardcodes a value
 ├── run_full_pipeline.py orchestrator; writes state + provenance to the output dir
 ├── utils/               cross-cutting helpers (seeding, io, hashing, history, plotting)
-├── data/                dataset download, YOLO-format conversion, feature cache
+├── data/                dataset download, YOLO-format conversion, feature cache,
+│                        train-fitted scalers
 ├── dataset/             torch Datasets over cached features
 └── models/              feature extractor, VAE, LSTM-VAE, YOLO trainers
 tests/                   pytest suite; helpers.py holds shared fixtures/utilities
@@ -79,9 +82,15 @@ pipeline_output/         run artifacts (not committed)
 - **Depend on a train-fitted artifact only.** Anything estimated from data
   (scaler, PCA, covariance, split) must be fitted inside the training scope and
   carried with the model. This is the Phase 1 leak; see 1.8 for the test that
-  guards it.
+  guards it. Represent it as an object with explicit `fit`/`transform`
+  (`scripts/data/normalize.py`) rather than a function that returns transformed
+  data plus two arrays — a function that derives its own statistics cannot
+  express *which* rows it used, and silently normalizes each sample with itself.
+  Fit the object on the train index, then transform everything.
 - **Tests must not need the vision stack.** cv2/torchvision/ultralytics imports
-  are lazy by design so the logic is testable on a CPU-only box.
+  are lazy by design so the logic is testable on a CPU-only box. Leakage tests
+  stub the extractor and run the real step function — a test that only inspects
+  source order passes even when the wrong rows are passed to `fit`.
 
 ## Style
 

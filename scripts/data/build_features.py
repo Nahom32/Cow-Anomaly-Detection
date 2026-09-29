@@ -54,10 +54,3 @@ def build_feature_dataset(
     valid = feature_cache.is_valid(rows)
     features = feature_cache.rows(rows)[valid]
     return np.ascontiguousarray(features, dtype=np.float32)
-
-
-def normalize_features(features, eps=1e-8):
-    min_val = features.min(axis=0)
-    max_val = features.max(axis=0)
-    normalized = (features - min_val) / (max_val - min_val + eps)
-    return normalized, min_val, max_val

@@ -87,14 +87,26 @@ No result below is trustworthy until these land.
 
 Directly addresses problems #4, #5 and `improvements_on_vad.md:304-308`.
 
-- [ ] **1.1** Move normalization after the split. `normalize_features`
-      (`scripts/data/build_features.py:50-54`) computes min/max over the **entire** feature matrix,
+- [x] **1.1** Move normalization after the split. `normalize_features`
+      (`scripts/data/build_features.py:50-54`) computed min/max over the **entire** feature matrix,
       and is called *before* `train_test_split` (`run_full_pipeline.py:153` → `:155`;
       `train_vae_pipeline.py:42` → `:44`). Every validation sample is currently normalized using
       statistics derived partly from itself. Fit on train only.
+      **Done** — `normalize_features` deleted and replaced by
+      `scripts/data.normalize.MinMaxNormalizer` (explicit `fit`/`transform`; `transform` on an
+      unfit scaler raises rather than deriving min/max from whatever it is handed). Both entry
+      points now split, then `.fit(features[train_idx])`, then transform. The persisted
+      `flat_vae_feature_min/max.npy` are the **train** extremes and the manifest records
+      `normalizer_fit_on="train"` plus the min/max array hashes. Guarded by
+      `tests/test_normalization.py`, which drives `step_flat_vae` and `train_vae_pipeline.main` for
+      real and asserts the train tensors and the saved scaler are bit-identical when only the val
+      rows are perturbed by +1000. This is the min/max half of 1.8; the mean/std, PCA and
+      covariance cases land with 1.2/4.3.
 - [ ] **1.2** Same fix for the LSTM-VAE z-score. Mean/std are computed over **all** sequences
       (`run_full_pipeline.py:198-203`, `train_lstm_vae_pipeline.py:47-54`) before the video split at
-      `:217-223`. Fit on train sequences only.
+      `:217-223`. Fit on train sequences only. `NormalisedSeqDataset` already takes `mean`/`std` as
+      constructor arguments, so this is a call-site fix plus the same train-only
+      invariant the min-max path now has.
 - [ ] **1.3** Replace the flat-VAE frame-level split with a grouped split. `run_full_pipeline.py:155-157`
       and `train_vae_pipeline.py:44` call `train_test_split` with **no `groups=` argument** —
       adjacent frames from the same cow land in both train and val (problem #5). Use
@@ -114,6 +126,10 @@ Directly addresses problems #4, #5 and `improvements_on_vad.md:304-308`.
 - [ ] **1.8** Regression test: assert that no statistic (min/max/mean/std/PCA/covariance) changes
       when val/test rows are perturbed. This is the single highest-value test in the project, and
       Phase 4 must not reintroduce the same leak.
+      **Partially covered by 1.1** — `tests/test_normalization.py` already asserts the min/max case
+      against the real `step_flat_vae` and `train_vae_pipeline.main` call sites. What remains is
+      mean/std (1.2), PCA and covariance, which do not exist until Phase 4.3 adds those detectors,
+      and the test-split case, which does not exist until 1.5.
 
 ---
 
