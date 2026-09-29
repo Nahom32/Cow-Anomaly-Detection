@@ -1,48 +1,23 @@
-from ultralytics import YOLO
+"""YOLO26m training.
 
-from scripts.utils.seeding import set_seed
+The training settings live in CONFIG["yolo"] and are shared with the 26n
+trainer; the only difference is the model size, so this is a thin wrapper rather
+than a second copy of two dozen hyperparameters.
+"""
+
+from scripts.config import CONFIG
+from scripts.models.train_yolo_n import train_yolo
 
 
-def train_yolo26m(data_yaml: str = "/content/cow_detection_fixed.yaml", seed: int = 42):
-    set_seed(seed)
-    model = YOLO("yolo26m.pt")
-    results = model.train(
-        data=data_yaml,
+def train_yolo26m(data_yaml, seed=None, **kwargs):
+    return train_yolo(
+        data_yaml,
+        model="yolo26m.pt",
         seed=seed,
-        epochs=150,
-        imgsz=640,
-        batch=16,
-        patience=50,
-        lr0=0.01,
-        lrf=0.01,
-        momentum=0.937,
-        weight_decay=0.0005,
-        warmup_epochs=3,
-        warmup_momentum=0.8,
-        box=7.5,
-        cls=0.5,
-        dfl=1.5,
-        hsv_h=0.02,
-        hsv_s=0.8,
-        hsv_v=0.4,
-        degrees=10.0,
-        translate=0.2,
-        scale=0.5,
-        shear=0.0,
-        perspective=0.0,
-        flipud=0.0,
-        fliplr=0.5,
-        mosaic=1.0,
-        optimizer="auto",
-        device=0,
-        workers=4,
-        project="cow_detector",
-        name="yolo26m_cbvd",
-        exist_ok=True,
-        verbose=True,
+        overrides={"name": "yolo26m_cbvd"},
+        **kwargs,
     )
-    return results
 
 
 if __name__ == "__main__":
-    train_yolo26m()
+    train_yolo26m(CONFIG.get("yolo_data_yaml", "/content/cow_detection_fixed.yaml"))

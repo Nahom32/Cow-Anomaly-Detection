@@ -8,8 +8,10 @@ from torch.utils.data import DataLoader, SubsetRandomSampler
 
 from scripts.data.feature_cache import open_run_feature_cache
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
+from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
+from scripts.utils.hashing import hash_json
 from scripts.utils.history import save_history
 from scripts.utils.seeding import set_seed
 
@@ -30,6 +32,13 @@ def main():
 
     set_seed(SEED)
     print(f"Using device: {DEVICE}")
+
+    config = {"model": "lstm_vae", "seed": SEED, "epochs": EPOCHS, "batch_size": BATCH_SIZE, "lr": LR,
+              "normal_action_ids": NORMAL_ACTION_IDS, "feature_layer": 9, "seq_len": SEQ_LEN,
+              "stride": STRIDE, "val_split": 0.2, "yolo_weights": YOLO_MODEL_PATH}
+    manifest = RunManifest.create(OUTPUT_DIR, config, seed=SEED, device=DEVICE)
+    manifest.record_artifact("yolo_weights", YOLO_MODEL_PATH)
+    manifest.record_artifact("annotations_csv", ANNOTATIONS_CSV)
 
     df = pd.read_csv(ANNOTATIONS_CSV, header=None, dtype={0: str})
     df.columns = ["video_id", "timestamp", "x1", "y1", "x2", "y2", "action_id", "target_id"]
@@ -95,6 +104,14 @@ def main():
     save_history(history, os.path.join(OUTPUT_DIR, "lstm_vae_training_history.csv"))
     np.save(os.path.join(OUTPUT_DIR, "feature_mean.npy"), mean)
     np.save(os.path.join(OUTPUT_DIR, "feature_std.npy"), std)
+
+    manifest.record_split("lstm_vae_videos", {"train": train_vids, "val": val_vids})
+    manifest.record_array("lstm_vae_feature_mean", mean)
+    manifest.record_array("lstm_vae_feature_std", std)
+    manifest.record_step("lstm_vae", config_hash=hash_json(config), n_sequences=len(seq_dataset),
+                         n_train=len(train_indices), n_val=len(val_indices), n_videos=len(video_ids))
+    manifest.save()
+    print(f"Manifest: {manifest.path}")
 
     hook.remove()
     print("Done.")

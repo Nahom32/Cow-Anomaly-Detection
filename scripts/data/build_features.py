@@ -1,6 +1,7 @@
 import numpy as np
 
 from scripts.data.feature_cache import (
+    DEFAULT_INPUT_SIZE,
     FeatureCache,
     cache_signature,
     make_key_extractor,
@@ -41,9 +42,12 @@ def build_feature_dataset(
 
     extract_fn = None
     if feature_extractor is not None:
+        # Take the resize from the cache signature: a crop extracted at a
+        # different size than its cache key would make the two disagree.
         extract_fn = make_key_extractor(
             frames_dir, feature_extractor, fps=fps, device=device,
             desc="Extracting frame features",
+            input_size=int(feature_cache.signature.get("input_size", DEFAULT_INPUT_SIZE)),
         )
 
     rows = feature_cache.ensure(keys, extract_fn, verbose=verbose)

@@ -68,9 +68,11 @@ pipeline_output/         run artifacts (not committed)
 - **Write artifacts atomically.** Use `scripts/utils/io.py`. A truncated
   `torch.save` output still exists on disk, and existence is currently how
   "this step is done" is decided.
-- **Record provenance.** Bind every artifact to its inputs with
-  `scripts/utils/hashing.py` (config hash, weights hash, feature-array hash) and
-  write it to the run manifest.
+- **Record provenance.** `scripts/manifest.py` writes `run_manifest.json` into
+  every output directory: git SHA, config hash, seed, and content hashes of
+  every input file, feature array and split. A step is only skipped if that
+  record says it was produced by the current config. Keep per-step config
+  hashes across resumes — deleting them turns every checkpoint into "unverifiable".
 - **Errors must be loud.** A wrong-but-plausible default — mismatched scaler,
   stale checkpoint, empty coverage cell — invalidates results silently. Raise
   instead of guessing.

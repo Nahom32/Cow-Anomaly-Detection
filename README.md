@@ -18,6 +18,7 @@ scripts/
 ├── run_full_pipeline.py             # Orchestrator: download → YOLO → VAE → LSTM-VAE
 ├── run_full_pipeline.sh             # Shell wrapper (creates venv, installs deps, runs pipeline)
 ├── setup.py                         # Install all dependencies
+├── manifest.py                      # run_manifest.json: git SHA, config hash, seed, artifact hashes
 ├── train_vae_pipeline.py            # Standalone flat VAE pipeline
 ├── train_lstm_vae_pipeline.py       # Standalone LSTM-VAE pipeline
 ├── data/
@@ -32,8 +33,8 @@ scripts/
     ├── feature_extractor.py         # YOLO forward hook at SPPF layer + cow crop feature extraction
     ├── vae.py                       # Flat VAE model, loss, training loop, plotting
     ├── lstm_vae.py                  # LSTM-VAE model, loss, training loop
-    ├── train_yolo_n.py              # YOLO26n training configuration
-    └── train_yolo_m.py              # YOLO26m training configuration
+    ├── train_yolo_n.py              # YOLO26n training (settings read from CONFIG['yolo'])
+    └── train_yolo_m.py              # YOLO26m training (thin wrapper over the same settings)
 ```
 
 ## Quick Start
@@ -53,7 +54,7 @@ python -m scripts.run_full_pipeline --output-dir my_experiment
 
 ### Resuming a previous run
 
-The pipeline writes a `.pipeline_state.json` to the output directory after each step. On re-run, completed steps are detected by their output files and skipped automatically.
+The pipeline writes a `.pipeline_state.json` to the output directory after each step, plus a `run_manifest.json` that records what produced the artifacts. On re-run, a step is skipped when its output exists **and** — for the two training steps — the manifest confirms it was produced by the current config. A checkpoint left over from a different config is reported as stale and retrained, rather than silently reported as a current result.
 
 ```bash
 # Re-run — skips all completed steps automatically
@@ -101,6 +102,28 @@ All artifacts are saved to `pipeline_output/`:
 | `lstm_vae_feature_mean.npy` | Mean values for feature normalisation |
 | `lstm_vae_feature_std.npy` | Std values for feature normalisation |
 | `run_manifest.json` | Provenance for the run: git SHA, config hash, seed, feature hashes |
+
+### Run manifest
+
+`run_manifest.json` is written to the output directory and updated after every
+step, so an interrupted run still records what it completed. It answers the
+question "which code, which config, which data produced these numbers?":
+
+| Field | Contents |
+|-------|----------|
+| `git` | commit SHA, branch, and whether the tree was dirty |
+| `config` / `config_hash` | the full resolved config and its hash |
+| `seed`, `device`, `command` | how the run was invoked |
+| `artifacts` | every input file, bound by SHA-256 rather than by name |
+| `arrays` | SHA-256 of the extracted feature, normalisation and split arrays |
+| `splits` | SHA-256 of each train/val assignment, plus its sizes |
+| `steps` | per-step config hash and counts, kept across resumes |
+| `previous_run` | the config hash of the run this one replaced |
+
+Step entries deliberately survive a resume: a step's entry holds the config hash
+it was *actually* trained under, which is what distinguishes a resumable step
+from a stale one. A checkpoint with no entry at all (e.g. one produced before
+the manifest existed) cannot be verified and is retrained.
 
 ### Feature cache
 

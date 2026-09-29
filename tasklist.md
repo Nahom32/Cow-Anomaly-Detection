@@ -67,7 +67,7 @@ No result below is trustworthy until these land.
 - [x] **0.9** Add a minimal test suite. There is currently **no** `tests/`, no CI, no lint/format
       config, no `AGENTS.md`. Start with leakage tests (Phase 1) and checkpoint round-trip tests
       (Phase 3) — those are the ones that silently invalidate results.
-- [ ] **0.10** Add a run manifest to every output dir: git SHA, config hash, seed, feature-array
+- [x] **0.10** Add a run manifest to every output dir: git SHA, config hash, seed, feature-array
       hash, split manifest hash. `is_step_done` (`run_full_pipeline.py:248-263`) is
       **existence-only**, so a model trained before a config change is silently reused. Resolved
       properly by 3.9.

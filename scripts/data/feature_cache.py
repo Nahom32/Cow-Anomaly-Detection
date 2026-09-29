@@ -66,12 +66,14 @@ def row_feature_key(row, video_id, fps=25):
     )
 
 
-def make_key_extractor(frames_dir, feature_extractor, fps=25, device="cuda", desc="Extracting features"):
+def make_key_extractor(frames_dir, feature_extractor, fps=25, device="cuda", desc="Extracting features",
+                       input_size=DEFAULT_INPUT_SIZE):
     """Build a `key -> feature | None` callable backed by the YOLO backbone.
 
     cv2 / torchvision / ultralytics are imported lazily inside the closure so
     that importing this module — and therefore the caching logic — does not
-    require the vision stack to be installed.
+    require the vision stack to be installed. `input_size` must match the value
+    the cache was keyed on, or the stored features would not match their name.
     """
 
     def extract(key):
@@ -88,9 +90,10 @@ def make_key_extractor(frames_dir, feature_extractor, fps=25, device="cuda", des
             return None
         h, w = img.shape[:2]
         bbox = (x1 * w, y1 * h, x2 * w, y2 * h)
-        return extract_cow_features(img, bbox, feature_extractor, device=device)
+        return extract_cow_features(img, bbox, feature_extractor, device=device, input_size=input_size)
 
     extract.description = desc
+    extract.input_size = int(input_size)
     return extract
 
 

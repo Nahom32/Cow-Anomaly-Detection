@@ -8,8 +8,10 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from scripts.data.build_features import build_feature_dataset, normalize_features
 from scripts.data.feature_cache import open_run_feature_cache
+from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.vae import VAE, plot_history, train_vae
+from scripts.utils.hashing import hash_json
 from scripts.utils.history import save_history
 from scripts.utils.seeding import set_seed
 
@@ -28,6 +30,13 @@ def main():
 
     set_seed(SEED)
     print(f"Using device: {DEVICE}")
+
+    config = {"model": "flat_vae", "seed": SEED, "epochs": EPOCHS, "batch_size": BATCH_SIZE,
+              "lr": LR, "normal_action_ids": NORMAL_ACTION_IDS, "feature_layer": 9,
+              "val_split": 0.2, "yolo_weights": YOLO_MODEL_PATH}
+    manifest = RunManifest.create(OUTPUT_DIR, config, seed=SEED, device=DEVICE)
+    manifest.record_artifact("yolo_weights", YOLO_MODEL_PATH)
+    manifest.record_artifact("annotations_csv", ANNOTATIONS_CSV)
 
     print("Loading annotations...")
     df = pd.read_csv(ANNOTATIONS_CSV, header=None, dtype={0: str})
@@ -71,6 +80,13 @@ def main():
     np.save(os.path.join(OUTPUT_DIR, "feature_max.npy"), max_val)
 
     plot_history(history, save_path=os.path.join(OUTPUT_DIR, "vae_training_history.png"))
+
+    manifest.record_array("flat_vae_features", features, n=features.shape[0], dim=features.shape[1])
+    manifest.record_array("flat_vae_train_rows", X_train)
+    manifest.record_array("flat_vae_val_rows", X_val)
+    manifest.record_step("flat_vae", config_hash=hash_json(config), n_features=int(features.shape[0]))
+    manifest.save()
+    print(f"Manifest: {manifest.path}")
 
     hook.remove()
     print("Done.")

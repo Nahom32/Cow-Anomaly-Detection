@@ -4,7 +4,13 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from scripts.data.feature_cache import FeatureCache, cache_signature, make_key_extractor, row_feature_key
+from scripts.data.feature_cache import (
+    DEFAULT_INPUT_SIZE,
+    FeatureCache,
+    cache_signature,
+    make_key_extractor,
+    row_feature_key,
+)
 from scripts.utils.seeding import DEFAULT_SEED, rng_for
 
 FEATURE_DIM_FALLBACK = 256
@@ -103,6 +109,7 @@ class CowSequenceDataset(Dataset):
                 fps=self.fps,
                 device=self.device,
                 desc="Extracting sequence features",
+                input_size=int(self.feature_cache.signature.get("input_size", DEFAULT_INPUT_SIZE)),
             )
 
         track_rows = {}
