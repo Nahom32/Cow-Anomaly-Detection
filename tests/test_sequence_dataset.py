@@ -157,3 +157,29 @@ def test_dataset_never_reads_the_frames_directory(annotations_df):
     for i in range(len(ds)):
         ds[i]
     assert not frame_exists("/definitely/not/here", "v1", 0)
+
+
+def test_stack_matches_reading_the_windows_directly(annotations_df):
+    """`stack` is how the normalizer gets its rows without touching val windows."""
+    ds = build_dataset(annotations_df, warm_cache(annotations_df))
+
+    stacked = ds.stack([0, 1])
+    assert stacked.shape == (2, SEQ_LEN, ds.feature_dim)
+    assert np.array_equal(stacked[0], ds[0].numpy())
+    assert np.array_equal(stacked[1], ds[1].numpy())
+
+
+def test_stack_reads_only_the_windows_it_is_given(annotations_df, monkeypatch):
+    """A val window must not be materialised in order to fit on train (1.2)."""
+    ds = build_dataset(annotations_df, warm_cache(annotations_df))
+    read = []
+    original_rows = ds.feature_cache.rows
+
+    def tracking_rows(rows):
+        read.extend(rows)
+        return original_rows(rows)
+
+    monkeypatch.setattr(ds.feature_cache, "rows", tracking_rows)
+    ds.stack([1])
+
+    assert read == list(ds.sequence_rows[1]), "stack() materialised windows it was not given"

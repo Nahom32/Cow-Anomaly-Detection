@@ -102,11 +102,18 @@ Directly addresses problems #4, #5 and `improvements_on_vad.md:304-308`.
       real and asserts the train tensors and the saved scaler are bit-identical when only the val
       rows are perturbed by +1000. This is the min/max half of 1.8; the mean/std, PCA and
       covariance cases land with 1.2/4.3.
-- [ ] **1.2** Same fix for the LSTM-VAE z-score. Mean/std are computed over **all** sequences
+- [x] **1.2** Same fix for the LSTM-VAE z-score. Mean/std are computed over **all** sequences
       (`run_full_pipeline.py:198-203`, `train_lstm_vae_pipeline.py:47-54`) before the video split at
       `:217-223`. Fit on train sequences only. `NormalisedSeqDataset` already takes `mean`/`std` as
       constructor arguments, so this is a call-site fix plus the same train-only
       invariant the min-max path now has.
+      **Done** — `ZScoreNormalizer` added to `scripts/data/normalize.py` (explicit `fit`/`transform`,
+      folds `eps` into the fitted `std_` and preserves shape for `(n_windows, seq_len, d)`). Both
+      `step_lstm_vae` and `train_lstm_vae_pipeline.main` now split by video **before** computing
+      statistics, fit the normalizer on `seq_dataset.stack(train_indices)` only, and record
+      `normalizer_fit_on="train"` in the manifest. `CowSequenceDataset.stack()` was added to read only
+      the selected windows. The LSTM-VAE's z-score statistics are now train-fitted and never derived
+      from the val set.
 - [ ] **1.3** Replace the flat-VAE frame-level split with a grouped split. `run_full_pipeline.py:155-157`
       and `train_vae_pipeline.py:44` call `train_test_split` with **no `groups=` argument** —
       adjacent frames from the same cow land in both train and val (problem #5). Use

@@ -87,6 +87,17 @@ class CowSequenceDataset(Dataset):
     def __len__(self):
         return len(self.sequences)
 
+    def stack(self, indices):
+        """The given windows as one `(n_windows, seq_len, feature_dim)` array.
+
+        Fitting a normalizer on the training split must not require reading the
+        validation windows (1.2), so the indices passed here are the ones the
+        split selected.
+        """
+        if not indices:
+            raise ValueError("stack() needs at least one window index")
+        return np.stack([self[int(i)].numpy() for i in indices], axis=0)
+
     # ── feature resolution ──────────────────────────────────────────────
 
     def _resolve_cache(self, feature_cache, verbose=True):

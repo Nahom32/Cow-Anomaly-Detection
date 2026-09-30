@@ -16,7 +16,7 @@ import pytest
 import torch
 
 import scripts.run_full_pipeline as pipeline
-from scripts.data.normalize import MinMaxNormalizer
+from scripts.data.normalize import MinMaxNormalizer, ZScoreNormalizer
 from scripts.run_full_pipeline import step_flat_vae
 from scripts.train_vae_pipeline import main as train_vae_main
 from scripts.utils.history import HISTORY_COLUMNS, empty_history
@@ -118,13 +118,117 @@ def test_feature_dim_mismatch_is_rejected(features):
 
 
 def test_non_2d_input_is_rejected():
-    with pytest.raises(ValueError, match="2-D"):
+    with pytest.raises(ValueError, match="at least 2 dimensions"):
         MinMaxNormalizer().fit(np.zeros(5, dtype=np.float32))
 
 
 def test_fitting_on_an_empty_split_is_rejected():
     with pytest.raises(ValueError, match="empty split"):
         MinMaxNormalizer().fit(np.zeros((0, 3), dtype=np.float32))
+
+
+# ── Z-score, the LSTM-VAE path (1.2) ───────────────────────────────────────
+
+
+@pytest.fixture
+def windows():
+    """A (12, 4, 3) block of overlapping windows, as the LSTM-VAE sees them."""
+    rng = np.random.default_rng(1)
+    return (rng.random((12, 4, 3), dtype=np.float32) * 5).astype(np.float32)
+
+
+def test_zscore_transform_before_fit_raises():
+    with pytest.raises(RuntimeError, match="before fit"):
+        ZScoreNormalizer().transform(np.zeros((2, 3), dtype=np.float32))
+
+
+def test_zscore_fitted_state_equals_the_train_window_statistics(windows):
+    """Statistics reduce over the window axis too, not just the window axis's first level."""
+    train = windows[:8]
+    normalizer = ZScoreNormalizer().fit(train)
+    flat = train.reshape(-1, train.shape[-1])
+
+    assert np.allclose(normalizer.mean_, flat.mean(axis=0), atol=1e-6)
+    assert np.allclose(normalizer.std_, flat.std(axis=0) + 1e-8, atol=1e-6)
+
+
+def test_zscore_fit_reduces_over_every_non_feature_axis(windows):
+    """`(n, seq_len, d)` and the same windows flattened must agree."""
+    block = ZScoreNormalizer().fit(windows[:8])
+    flat = ZScoreNormalizer().fit(windows[:8].reshape(-1, windows.shape[-1]))
+
+    assert np.array_equal(block.mean_, flat.mean_)
+    assert np.array_equal(block.std_, flat.std_)
+
+
+def test_zscore_transform_reduces_over_every_non_feature_axis(windows):
+    normalizer = ZScoreNormalizer().fit(windows[:8])
+    block = normalizer.transform(windows)
+    flat = normalizer.transform(windows.reshape(-1, windows.shape[-1]))
+
+    assert block.shape == windows.shape
+    assert np.allclose(block.reshape(-1, 3), flat, atol=1e-6)
+
+
+def test_zscore_fitting_on_train_only_ignores_val_windows(windows):
+    """What the fit sees is what it uses: the tail cannot reach the statistics.
+
+    The guarantee is a property of *which rows are passed to `fit`*, which the
+    call-site tests below check. Here the point is only that `fit` reduces over
+    what it was handed and nothing else.
+    """
+    perturbed_tail = windows.copy()
+    perturbed_tail[8:] += 1000.0
+
+    a = ZScoreNormalizer().fit(windows[:8])
+    b = ZScoreNormalizer().fit(perturbed_tail[:8])
+
+    assert np.array_equal(a.mean_, b.mean_)
+    assert np.array_equal(a.std_, b.std_)
+
+
+def test_zscore_val_windows_outside_the_train_range_stay_out(windows):
+    """A val window far from the train mean must not be pulled back to 0."""
+    train = windows[:8]
+    shifted = windows.copy()
+    shifted[8:] += 1000.0
+
+    transformed = ZScoreNormalizer().fit(train).transform(shifted)
+    assert transformed[8:].max() > 100.0, "a shifted val window must stay far from the mean"
+    assert np.abs(transformed[:8]).max() < 5.0
+
+
+def test_zscore_eps_is_folded_into_the_fitted_std(windows):
+    """The persisted std must be usable at scoring time as-is (3.5.1)."""
+    train = windows[:8]
+    normalizer = ZScoreNormalizer().fit(train)
+
+    # `transform` divides by the stored std and adds nothing further, so a
+    # checkpoint holding mean_/std_ reproduces these numbers exactly.
+    flat = train.reshape(-1, train.shape[-1])
+    expected = (flat - normalizer.mean_) / normalizer.std_
+    assert np.array_equal(normalizer.transform(train).reshape(-1, 3), expected)
+
+
+def test_zscore_eps_protects_a_constant_feature_column():
+    """A dead column has std 0; `eps` keeps it finite instead of producing inf/nan."""
+    block = np.zeros((3, 4, 2), dtype=np.float32)
+    block[:, :, 0] = np.arange(4, dtype=np.float32)
+    transformed = ZScoreNormalizer().fit_transform(block)
+
+    assert np.isfinite(transformed).all()
+    assert np.array_equal(transformed[..., 1], np.zeros((3, 4), dtype=np.float32))
+
+
+def test_zscore_feature_dim_mismatch_is_rejected(windows):
+    normalizer = ZScoreNormalizer().fit(windows)
+    with pytest.raises(ValueError, match="does not match the fitted dim"):
+        normalizer.transform(windows[:, :, :2])
+
+
+def test_zscore_fitting_on_an_empty_split_is_rejected():
+    with pytest.raises(ValueError, match="empty split"):
+        ZScoreNormalizer().fit(np.zeros((0, 4, 3), dtype=np.float32))
 
 
 def test_entry_points_split_before_fitting():

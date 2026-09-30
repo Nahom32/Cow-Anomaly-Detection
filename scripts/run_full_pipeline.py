@@ -17,7 +17,7 @@ from scripts.data.build_features import build_feature_dataset
 from scripts.data.create_yolo_dataset import create_yolo_dataset
 from scripts.data.download_dataset import download_dataset
 from scripts.data.feature_cache import open_run_feature_cache
-from scripts.data.normalize import MinMaxNormalizer
+from scripts.data.normalize import MinMaxNormalizer, ZScoreNormalizer
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
 from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
@@ -241,13 +241,20 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
     )
     print(f"Total sequences: {len(seq_dataset)}")
 
-    print("Computing normalisation statistics...")
-    all_feats = []
-    for i in range(len(seq_dataset)):
-        all_feats.append(seq_dataset[i].numpy())
-    all_feats = np.concatenate(all_feats, axis=0)
-    mean = all_feats.mean(axis=0)
-    std = all_feats.std(axis=0) + 1e-8
+    # Split by video *before* computing the statistics (1.2). Fitting mean/std
+    # over every sequence in the run let each val window contribute to the
+    # numbers it was then normalized by.
+    video_ids = list(set(key[0] for key in seq_dataset.tracks.keys()))
+    train_vids, val_vids = train_test_split(
+        video_ids, test_size=config["val_split"], random_state=config["random_seed"]
+    )
+
+    train_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in train_vids]
+    val_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in val_vids]
+
+    print("Computing normalisation statistics from the training sequences...")
+    normalizer = ZScoreNormalizer().fit(seq_dataset.stack(train_indices))
+    mean, std = normalizer.mean_, normalizer.std_
 
     norm_dataset = NormalisedSeqDataset(
         mean=mean,
@@ -262,14 +269,6 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
         device=device,
         seed=config["random_seed"],
     )
-
-    video_ids = list(set(key[0] for key in seq_dataset.tracks.keys()))
-    train_vids, val_vids = train_test_split(
-        video_ids, test_size=config["val_split"], random_state=config["random_seed"]
-    )
-
-    train_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in train_vids]
-    val_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in val_vids]
 
     train_loader = DataLoader(norm_dataset, batch_size=config["lstm_vae_batch_size"], sampler=SubsetRandomSampler(train_indices, generator=torch.Generator().manual_seed(config["random_seed"])))
     val_loader = DataLoader(norm_dataset, batch_size=config["lstm_vae_batch_size"], sampler=SubsetRandomSampler(val_indices, generator=torch.Generator().manual_seed(config["random_seed"])))
@@ -306,6 +305,7 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
             n_train=len(train_indices),
             n_val=len(val_indices),
             n_videos=len(video_ids),
+            normalizer_fit_on="train",
             weights_sha256=(manifest.data.get("artifacts", {}).get("yolo_weights", {}) or {}).get("sha256"),
         )
     print("LSTM-VAE complete.")

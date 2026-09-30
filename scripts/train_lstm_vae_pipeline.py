@@ -7,6 +7,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, SubsetRandomSampler
 
 from scripts.data.feature_cache import open_run_feature_cache
+from scripts.data.normalize import ZScoreNormalizer
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
 from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
@@ -61,14 +62,18 @@ def main():
     )
     print(f"Total sequences: {len(seq_dataset)}")
 
-    print("Computing normalisation statistics...")
-    all_feats = []
-    for i in range(len(seq_dataset)):
-        seq = seq_dataset[i]
-        all_feats.append(seq.numpy())
-    all_feats = np.concatenate(all_feats, axis=0)
-    mean = all_feats.mean(axis=0)
-    std = all_feats.std(axis=0) + 1e-8
+    # Split by video *before* computing the statistics (1.2). Fitting mean/std
+    # over every sequence in the run let each val window contribute to the
+    # numbers it was then normalized by.
+    video_ids = list(set(key[0] for key in seq_dataset.tracks.keys()))
+    train_vids, val_vids = train_test_split(video_ids, test_size=0.2, random_state=SEED)
+
+    train_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in train_vids]
+    val_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in val_vids]
+
+    print("Computing normalisation statistics from the training sequences...")
+    normalizer = ZScoreNormalizer().fit(seq_dataset.stack(train_indices))
+    mean, std = normalizer.mean_, normalizer.std_
 
     norm_dataset = NormalisedSeqDataset(
         mean=mean,
@@ -83,12 +88,6 @@ def main():
         device=DEVICE,
         seed=SEED,
     )
-
-    video_ids = list(set(key[0] for key in seq_dataset.tracks.keys()))
-    train_vids, val_vids = train_test_split(video_ids, test_size=0.2, random_state=SEED)
-
-    train_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in train_vids]
-    val_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in val_vids]
 
     train_generator = torch.Generator().manual_seed(SEED)
     val_generator = torch.Generator().manual_seed(SEED)
@@ -109,7 +108,8 @@ def main():
     manifest.record_array("lstm_vae_feature_mean", mean)
     manifest.record_array("lstm_vae_feature_std", std)
     manifest.record_step("lstm_vae", config_hash=hash_json(config), n_sequences=len(seq_dataset),
-                         n_train=len(train_indices), n_val=len(val_indices), n_videos=len(video_ids))
+                         n_train=len(train_indices), n_val=len(val_indices), n_videos=len(video_ids),
+                         normalizer_fit_on="train")
     manifest.save()
     print(f"Manifest: {manifest.path}")
 
