@@ -58,11 +58,30 @@ def test_flat_vae_saves_its_plot_instead_of_only_showing_it():
     assert "headless=" in src
 
 
-def test_flat_vae_splits_indices_so_the_split_can_be_hashed():
-    src = source_of(step_flat_vae)
-    assert "all_idx" in src
-    assert "train_test_split(" in src
-    assert "record_split(" in src
+def test_flat_vae_resolves_the_grouped_split_rather_than_drawing_its_own():
+    """1.3/1.4: no per-stage `train_test_split` left anywhere in the VAE path.
+
+    The flat VAE used to split row indices with no `groups=`, which put consecutive
+    frames of one cow on both sides. Asserting the *absence* of the old call is the
+    point: a grouped split that a later edit quietly reintroduces a row split beside
+    would otherwise still pass every behavioural test, because the row split would
+    just win.
+    """
+    for stage in (step_flat_vae, step_lstm_vae):
+        src = source_of(stage)
+        assert "train_test_split" not in src, f"{stage.__name__} draws its own split"
+        assert "resolve_split(" in src, f"{stage.__name__} does not read the canonical manifest"
+        assert "resolve_indices(" in src, f"{stage.__name__} does not resolve rows through it"
+        assert "record_split(" in src
+
+
+def test_both_vae_stages_record_the_same_canonical_split():
+    """The two models must record an identically named, identically shaped split."""
+    for stage in (step_flat_vae, step_lstm_vae):
+        src = source_of(stage)
+        assert '"canonical_groups"' in src, f"{stage.__name__} does not record canonical_groups"
+        assert "split_group_key=" in src, f"{stage.__name__} does not record the group key"
+        assert "split_sha256=" in src, f"{stage.__name__} does not record the split hash"
 
 
 @pytest.mark.parametrize(

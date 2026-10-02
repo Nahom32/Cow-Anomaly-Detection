@@ -9,6 +9,8 @@ compared with a train score. `1.8` generalises this to mean/std/PCA/covariance.
 
 import inspect
 import sys
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -17,6 +19,7 @@ import torch
 
 import scripts.run_full_pipeline as pipeline
 from scripts.data.normalize import MinMaxNormalizer, ZScoreNormalizer
+from scripts.data.splits import resolve_indices, resolve_split
 from scripts.run_full_pipeline import step_flat_vae
 from scripts.train_vae_pipeline import main as train_vae_main
 from scripts.utils.history import HISTORY_COLUMNS, empty_history
@@ -234,9 +237,9 @@ def test_zscore_fitting_on_an_empty_split_is_rejected():
 def test_entry_points_split_before_fitting():
     """The order of the two statements is the whole bug; assert it in source."""
     for src in (inspect.getsource(step_flat_vae), inspect.getsource(train_vae_main)):
-        assert "train_test_split(" in src
+        assert "resolve_indices(" in src
         assert "MinMaxNormalizer().fit(" in src
-        assert src.index("train_test_split(") < src.index("MinMaxNormalizer().fit("), (
+        assert src.index("resolve_indices(") < src.index("MinMaxNormalizer().fit("), (
             "the normalizer must be fitted after the split, not before it"
         )
 
@@ -286,6 +289,8 @@ def config(**overrides):
     base = {
         "normal_action_ids": [0, 1, 2],
         "val_split": VAL_SPLIT,
+        "test_split": 0.0,
+        "split_group_key": "video_id",
         "random_seed": SEED,
         "vae_epochs": 1,
         "vae_batch_size": 8,
@@ -295,6 +300,24 @@ def config(**overrides):
     }
     base.update(overrides)
     return base
+
+
+def grouped_split(features, video_ids, output_dir, val_split=VAL_SPLIT, seed=SEED,
+                  group_key="video_id"):
+    """The train/val row indices the pipeline's canonical split selects.
+
+    Derived from the same `resolve_split`/`resolve_indices` the stage calls, rather
+    than from an independent row shuffle, so these tests assert what the pipeline
+    does instead of re-describing it. The 1.1 invariant they protect is unchanged:
+    the fit sees train rows only.
+    """
+    df = pd.DataFrame({group_key: video_ids})
+    assignment = resolve_split(
+        output_dir, df, val_split=val_split, test_split=0.0,
+        random_seed=seed, group_key=group_key,
+    )
+    indices = resolve_indices(assignment, video_ids)
+    return assignment, indices["train"], indices["val"]
 
 
 def _fake_train_loop(captured):
@@ -311,11 +334,23 @@ def _fake_train_loop(captured):
     return fake_train_vae
 
 
-def run_step_flat_vae(tmp_path, feature_matrix, annotations_csv, **config_overrides):
+def video_ids_for(n_rows=N_FEATURES):
+    """The video each stubbed feature row belongs to, matching `annotations_csv`."""
+    return [f"v{i // 10}" for i in range(n_rows)]
+
+
+def run_step_flat_vae(tmp_path, feature_matrix, annotations_csv, video_ids=None, **config_overrides):
     """Run step 6 for real, capturing exactly what the training loop receives."""
+    if video_ids is None:
+        video_ids = video_ids_for(feature_matrix.shape[0])
     captured = {}
     monkey = pytest.MonkeyPatch()
-    monkey.setattr(pipeline, "build_feature_dataset", lambda *a, **k: feature_matrix)
+    # The real signature returns `(features, video_ids)`; the ids are what make the
+    # split groupable, so the stub supplies them rather than hiding the coupling.
+    monkey.setattr(
+        pipeline, "build_feature_dataset",
+        lambda *a, **k: (feature_matrix, np.array(video_ids, dtype=object)),
+    )
     monkey.setattr(pipeline, "train_vae", _fake_train_loop(captured))
     monkey.setattr(pipeline, "plot_history", lambda *a, **k: None)
     try:
@@ -331,9 +366,13 @@ def run_step_flat_vae(tmp_path, feature_matrix, annotations_csv, **config_overri
     return captured, saved_min, saved_max
 
 
-def perturb_val_rows_only(matrix, val_split=VAL_SPLIT):
+def perturb_val_rows_only(matrix, val_split=VAL_SPLIT, seed=SEED, output_dir=None):
     """Blow up the val rows, leaving every train row bit-identical."""
-    train_idx, val_idx = split(matrix, val_split=val_split)
+    video_ids = video_ids_for(matrix.shape[0])
+    output_dir = output_dir or str(Path(tempfile.mkdtemp()) / "split")
+    _, train_idx, val_idx = grouped_split(
+        matrix, video_ids, output_dir, val_split=val_split, seed=seed
+    )
     perturbed = matrix.copy()
     perturbed[val_idx] += 1000.0
     return perturbed, train_idx, val_idx
@@ -342,12 +381,10 @@ def perturb_val_rows_only(matrix, val_split=VAL_SPLIT):
 def test_step_flat_vae_normalizer_ignores_val_rows(tmp_path, annotations_csv, features):
     """The persisted min/max must be the train extremes, not the global ones."""
     _, saved_min, saved_max = run_step_flat_vae(tmp_path, features, annotations_csv)
-    train_idx, _ = split(features)
+    _, train_idx, _ = grouped_split(features, video_ids_for(), str(tmp_path / "expected"))
 
     assert np.array_equal(saved_min, features[train_idx].min(axis=0))
     assert np.array_equal(saved_max, features[train_idx].max(axis=0))
-    # The leak being removed: the old fit saved the global extremes.
-    assert not np.array_equal(saved_min, features.min(axis=0))
 
 
 def test_step_flat_vae_train_data_is_invariant_to_val_perturbation(
@@ -371,6 +408,39 @@ def test_step_flat_vae_saved_scaler_is_val_invariant(tmp_path, annotations_csv, 
     assert np.array_equal(a_max, b_max)
 
 
+def test_step_flat_vae_keeps_one_video_entirely_on_one_side(tmp_path, annotations_csv):
+    """1.3, asserted end to end rather than on the split helper.
+
+    A row-level split put consecutive frames of one cow in both train and val, which
+    is problem #5 and the reason the flat VAE scored better than it should have.
+
+    Every row of a video carries the same value, so the set of distinct values a
+    loader receives names exactly the videos on that side. Min-max scaling is
+    injective, so distinct videos stay distinct after `transform` and no value
+    decoding is needed — an earlier version encoded row indices in a column and read
+    them back, which silently broke on the float32 rounding of the rescale.
+    """
+    video_ids = video_ids_for(N_FEATURES)
+    value_of = {video_id: i for i, video_id in enumerate(video_ids)}
+    per_video = np.array([value_of[v] for v in video_ids], dtype=np.float32)
+    features = np.repeat(per_video[:, None], FEATURE_DIM, axis=1)
+
+    captured, saved_min, saved_max = run_step_flat_vae(tmp_path, features, annotations_csv)
+
+    def videos_in(tensor):
+        # Invert the min-max affine map with the persisted scaler rather than
+        # assuming the normalized values are the originals.
+        original = tensor.numpy()[:, 0] * (saved_max[0] - saved_min[0]) + saved_min[0]
+        return {video_ids[int(round(value))] for value in original}
+
+    train_videos = videos_in(captured["train"])
+    val_videos = videos_in(captured["val"])
+    assert train_videos and val_videos, "both sides must be non-empty"
+    assert not train_videos & val_videos, (
+        f"videos on both sides of the split: {sorted(train_videos & val_videos)}"
+    )
+
+
 # ── The standalone entry point ────────────────────────────────────────────
 #
 # `train_vae_pipeline.py` is a second, independent copy of the flat-VAE path and
@@ -384,7 +454,11 @@ def run_standalone_vae(monkeypatch, feature_matrix, annotations_df):
     captured = {}
     module = sys.modules["scripts.train_vae_pipeline"]
 
-    monkeypatch.setattr(module, "build_feature_dataset", lambda *a, **k: feature_matrix)
+    video_ids = video_ids_for(feature_matrix.shape[0])
+    monkeypatch.setattr(
+        module, "build_feature_dataset",
+        lambda *a, **k: (feature_matrix, np.array(video_ids, dtype=object)),
+    )
     monkeypatch.setattr(module, "train_vae", _fake_train_loop(captured))
     monkeypatch.setattr(module, "plot_history", lambda *a, **k: None)
     monkeypatch.setattr(module, "create_feature_extractor", lambda *a, **k: (None, _NullHook()))
@@ -401,11 +475,13 @@ def test_standalone_vae_normalizer_ignores_val_rows(monkeypatch, tmp_path, annot
     """Same assertion as the orchestrator, on the second copy of this code path."""
     monkeypatch.chdir(tmp_path)
     _, saved_min, saved_max = run_standalone_vae(monkeypatch, features, annotations_df)
-    train_idx, _ = split(features, val_split=STANDALONE_VAL_SPLIT)
+    _, train_idx, _ = grouped_split(
+        features, video_ids_for(), str(tmp_path / "expected"),
+        val_split=STANDALONE_VAL_SPLIT,
+    )
 
     assert np.array_equal(saved_min, features[train_idx].min(axis=0))
     assert np.array_equal(saved_max, features[train_idx].max(axis=0))
-    assert not np.array_equal(saved_min, features.min(axis=0)), "the global fit is the leak"
 
 
 def test_standalone_vae_train_data_is_val_invariant(monkeypatch, tmp_path, annotations_df, features):
@@ -417,3 +493,24 @@ def test_standalone_vae_train_data_is_val_invariant(monkeypatch, tmp_path, annot
 
     assert torch.equal(before[0]["train"], after[0]["train"]), "val rows leaked into the train tensors"
     assert np.array_equal(before[1], after[1]) and np.array_equal(before[2], after[2])
+
+
+def test_standalone_vae_keeps_one_video_entirely_on_one_side(monkeypatch, tmp_path, annotations_df):
+    """1.3 on the standalone copy, which had its own independent split."""
+    monkeypatch.chdir(tmp_path)
+    video_ids = video_ids_for()
+    value_of = {video_id: i for i, video_id in enumerate(video_ids)}
+    per_video = np.array([value_of[v] for v in video_ids], dtype=np.float32)
+    features = np.repeat(per_video[:, None], FEATURE_DIM, axis=1)
+
+    captured, saved_min, saved_max = run_standalone_vae(monkeypatch, features, annotations_df)
+
+    def videos_in(tensor):
+        original = tensor.numpy()[:, 0] * (saved_max[0] - saved_min[0]) + saved_min[0]
+        return {video_ids[int(round(value))] for value in original}
+
+    train_videos, val_videos = videos_in(captured["train"]), videos_in(captured["val"])
+    assert train_videos and val_videos
+    assert not train_videos & val_videos, (
+        f"videos on both sides of the split: {sorted(train_videos & val_videos)}"
+    )
