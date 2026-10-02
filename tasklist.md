@@ -114,20 +114,64 @@ Directly addresses problems #4, #5 and `improvements_on_vad.md:304-308`.
       `normalizer_fit_on="train"` in the manifest. `CowSequenceDataset.stack()` was added to read only
       the selected windows. The LSTM-VAE's z-score statistics are now train-fitted and never derived
       from the val set.
-- [ ] **1.3** Replace the flat-VAE frame-level split with a grouped split. `run_full_pipeline.py:155-157`
+- [x] **1.3** Replace the flat-VAE frame-level split with a grouped split. `run_full_pipeline.py:155-157`
       and `train_vae_pipeline.py:44` call `train_test_split` with **no `groups=` argument** —
       adjacent frames from the same cow land in both train and val (problem #5). Use
       `GroupShuffleSplit` on `video_id` (and `target_id` where reliable).
-- [ ] **1.4** **Stop the two models from being trained on different partitions.** The flat VAE
+      **Done** — `scripts/data/splits.py` owns the split: `build_split` draws it with
+      `GroupShuffleSplit` over `CONFIG["split_group_key"]`, and `resolve_indices` maps rows
+      onto it. The unit had to be plumbed through to make grouping possible at all:
+      `build_feature_dataset` returned a bare `(n, d)` matrix, so `step_flat_vae` could not
+      tell which video a row came from and had no choice but to split row indices. It now
+      returns `(features, video_ids)`, filtered by the same `valid` mask that filters the
+      features, with a count assertion so misaligned ids fail instead of quietly putting
+      the wrong video's frames on each side. All four entry points (both orchestrator
+      stages, both standalone pipelines) resolve the split through `resolve_indices`.
+      `tests/test_splits.py` and `tests/test_normalization.py` assert end to end that no
+      video appears on both sides of either stage's split, and both were checked to fail
+      when a row-level split is put back. Grouping on `video_id` does **not** stop one cow
+      spanning train and val through different videos — AVA cows recur — so `target_id` is
+      available as the stricter key and is covered by a test showing the video-level split
+      does leave cows on both sides. **Q1 is still open**: `target_id` reliability is
+      unverified, so the default stays `video_id`.
+- [x] **1.4** **Stop the two models from being trained on different partitions.** The flat VAE
       splits at frame level; the LSTM-VAE splits by video. Until these share one split, no
       Flat-vs-LSTM comparison means anything. Emit a single canonical split manifest
       (`{video_id -> train|val|test}`) and have both stages consume it.
+      **Done** — the split is drawn once from the annotation frame and persisted to
+      `split_manifest.json` in the output dir (`save_split`/`load_split`, atomic write).
+      `resolve_split` loads it if present and draws it only if absent, so whichever stage
+      runs first decides and the other adopts. Drawn from `df` rather than from the rows
+      that survived feature extraction: a video whose crops are all missing still gets an
+      assignment, so the LSTM stage's shorter video list is a subset of the flat stage's
+      instead of a different partition. The old LSTM split also redrew from a `set`, whose
+      iteration order is not stable across processes — the same seed produced different
+      partitions in different runs, which is now impossible since the ids are sorted in
+      `unique_groups`. Inconsistency is loud: a manifest whose recorded `group_key`,
+      `val_split`, `test_split` or `random_seed` disagrees with the config raises rather
+      than being honoured, and groups appearing in the annotations but absent from the
+      manifest raise too. Both stages record `canonical_groups` plus `split_group_key` and
+      `split_sha256`, so a resumed run can prove both read one partition. Guarded by
+      `tests/test_splits.py`, which runs both real stages into one output dir and compares
+      both stages' recorded hashes against the file on disk — comparing the two stages to
+      each other would not catch a stage that redrew its own split and recorded that.
 - [ ] **1.5** Create a **test set**. Currently train/val only, and val doubles as the reported
       number. Introduce the three-way protocol from `problems_observed.md:339-349` and
       `improvements_on_vad.md:304-308`: train → val → **threshold selection** → test.
+      **Scaffolded by 1.3/1.4, not done** — `CONFIG["test_split"]` and the third slot exist
+      (`build_split` carves test out before val so the reported val fraction is not inflated,
+      and both draws use offset seeds), and every stage already resolves and records all three
+      splits. What is missing is a non-zero `test_split` and anything that *scores* on test;
+      until then `test` is empty and the number still reported is the val number.
 - [ ] **1.6** Propagate the detector-stage grouping. `create_yolo_dataset.py:70-73` is the **only**
       grouped split in the repo (verified: 392 train / 99 val videos, zero overlap) and it is not
       carried into the VAE stage.
+      **Now partly actionable** — 1.4 gives the VAE stages a canonical manifest to conform to,
+      so this is a matter of `create_yolo_dataset` consuming `resolve_split` instead of drawing
+      its own, which also settles 1.7. Note the two currently disagree on more than the VAE
+      stages did: the YOLO split groups on `video_id` (and with a different seed and fraction
+      path than `GroupShuffleSplit` uses), so after this lands the detector and the features it
+      produced will have been trained and split under different partitions.
 - [ ] **1.7** Pass `CONFIG["random_seed"]` / `CONFIG["val_split"]` through. `step_create_yolo_dataset`
       (`run_full_pipeline.py:87-93`) ignores both and falls back to module defaults.
 - [ ] **1.8** Regression test: assert that no statistic (min/max/mean/std/PCA/covariance) changes
@@ -669,6 +713,13 @@ cannot be finalized until the benchmark and report stages exist.
 
 - **Q1** Is AVA `target_id` reliable enough to use as identity, or is 5.2 (real tracking) required
       before any temporal experiment is valid? This determines whether Phase 5 gates Phase 7.
+      **Now decidable as a config change** — `CONFIG["split_group_key"]` already accepts
+      `"target_id"`, and `resolve_split` refuses to reuse a manifest drawn under the other key
+      rather than silently mixing the two. 1.3's grouped split is `video_id`-based, so the same
+      cow can still appear in train and val via a different video; that is the concrete reason
+      Q1 matters for the split and not only for temporal modelling. `tests/test_splits.py` has
+      the check that would justify switching (video-level grouping demonstrably leaves cows on
+      both sides; `target_id` grouping does not).
 - **Q2** ~~Are expert-annotated abnormal events obtainable?~~ **Resolved — no longer needed.** Under
       the settled framing (novelty = unseen), ground truth is generated by the leave-one-action-out
       driver (6.2), not annotated. No veterinary expertise is required, and none is claimed.

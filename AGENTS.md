@@ -18,7 +18,7 @@ later phase from re-introducing a bug an earlier one fixed.
 
 ## Current state
 
-Phase 0 (foundations & reproducibility) and tasks 1.1–1.2 (normalization fitted on train only: min/max for the flat VAE, mean/std for the LSTM-VAE) are implemented. The rest of Phase 1 is not. In particular: **there is still no evaluation code, no anomaly-score function, no test split and no train/val/test protocol**, and the split is still at frame level, so adjacent frames of one cow land on both sides (tasks 1.3, 1.4). No number produced by this repo is publishable until Phase 1 lands.
+Phase 0 (foundations & reproducibility) and tasks 1.1–1.4 are implemented: normalization is fitted on train only (min/max for the flat VAE, mean/std for the LSTM-VAE), and the split is grouped and canonical (`scripts/data/splits.py` draws it once from the annotation frame, persists it to `split_manifest.json`, and every stage resolves it from there). The rest of Phase 1 is not. In particular: **there is still no evaluation code, no anomaly-score function, and no test split** — `CONFIG["test_split"]` and the third slot exist but `test` is empty, so val is still the reported number (tasks 1.5). Grouping is on `video_id`, which does not stop one cow spanning train and val through different videos; `target_id` is available as the stricter key and Q1 decides whether to switch. `create_yolo_dataset` still draws its own split rather than consuming the manifest (1.6, 1.7). No number produced by this repo is publishable until Phase 1 lands.
 
 ## Commands
 
