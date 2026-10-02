@@ -3,11 +3,11 @@ import os
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, SubsetRandomSampler
 
 from scripts.data.feature_cache import open_run_feature_cache
 from scripts.data.normalize import ZScoreNormalizer
+from scripts.data.splits import describe, resolve_indices, resolve_split
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
 from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
@@ -30,13 +30,15 @@ def main():
     LR = 1e-3
     OUTPUT_DIR = "."
     SEED = 42
+    SPLIT_GROUP_KEY = "video_id"
 
     set_seed(SEED)
     print(f"Using device: {DEVICE}")
 
     config = {"model": "lstm_vae", "seed": SEED, "epochs": EPOCHS, "batch_size": BATCH_SIZE, "lr": LR,
               "normal_action_ids": NORMAL_ACTION_IDS, "feature_layer": 9, "seq_len": SEQ_LEN,
-              "stride": STRIDE, "val_split": 0.2, "yolo_weights": YOLO_MODEL_PATH}
+              "stride": STRIDE, "val_split": 0.2, "test_split": 0.0,
+              "split_group_key": SPLIT_GROUP_KEY, "yolo_weights": YOLO_MODEL_PATH}
     manifest = RunManifest.create(OUTPUT_DIR, config, seed=SEED, device=DEVICE)
     manifest.record_artifact("yolo_weights", YOLO_MODEL_PATH)
     manifest.record_artifact("annotations_csv", ANNOTATIONS_CSV)
@@ -62,15 +64,27 @@ def main():
     )
     print(f"Total sequences: {len(seq_dataset)}")
 
-    # Split by video *before* computing the statistics (1.2). Fitting mean/std
-    # over every sequence in the run let each val window contribute to the
-    # numbers it was then normalized by.
-    video_ids = list(set(key[0] for key in seq_dataset.tracks.keys()))
-    train_vids, val_vids = train_test_split(video_ids, test_size=0.2, random_state=SEED)
+    # The canonical split (1.4), shared with the flat VAE through the run's split
+    # manifest rather than redrawn here from an unordered set.
+    assignment = resolve_split(
+        OUTPUT_DIR, df, val_split=0.2, test_split=0.0,
+        random_seed=SEED, group_key=SPLIT_GROUP_KEY,
+    )
+    print(
+        f"Split by {SPLIT_GROUP_KEY}: "
+        + ", ".join(f"{name}={len(assignment[name])}" for name in ("train", "val", "test"))
+    )
+    # Tracks are keyed `(video_id, target_id)`; which half is the split unit depends
+    # on the configured group key.
+    track_key_index = 0 if SPLIT_GROUP_KEY == "video_id" else 1
+    sequence_groups = [str(key[track_key_index]) for key, _ in seq_dataset.sequences]
+    sequence_split = resolve_indices(assignment, sequence_groups)
+    train_indices = sequence_split["train"].tolist()
+    val_indices = sequence_split["val"].tolist()
 
-    train_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in train_vids]
-    val_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in val_vids]
-
+    # Statistics from the training sequences only (1.2). Fitting mean/std over every
+    # sequence in the run let each val window contribute to the numbers it was then
+    # normalized by.
     print("Computing normalisation statistics from the training sequences...")
     normalizer = ZScoreNormalizer().fit(seq_dataset.stack(train_indices))
     mean, std = normalizer.mean_, normalizer.std_
@@ -104,11 +118,20 @@ def main():
     np.save(os.path.join(OUTPUT_DIR, "feature_mean.npy"), mean)
     np.save(os.path.join(OUTPUT_DIR, "feature_std.npy"), std)
 
-    manifest.record_split("lstm_vae_videos", {"train": train_vids, "val": val_vids})
+    manifest.record_split("canonical_groups", {
+        name: sorted(map(str, assignment[name])) for name in ("train", "val", "test")
+    })
+    manifest.record_split("lstm_vae_groups", {
+        name: sorted({sequence_groups[i] for i in sequence_split[name]})
+        for name in ("train", "val", "test")
+    })
     manifest.record_array("lstm_vae_feature_mean", mean)
     manifest.record_array("lstm_vae_feature_std", std)
     manifest.record_step("lstm_vae", config_hash=hash_json(config), n_sequences=len(seq_dataset),
-                         n_train=len(train_indices), n_val=len(val_indices), n_videos=len(video_ids),
+                         n_train=len(train_indices), n_val=len(val_indices),
+                         n_videos=len(set(sequence_groups)),
+                         split_group_key=SPLIT_GROUP_KEY,
+                         split_sha256=describe(assignment)["sha256"],
                          normalizer_fit_on="train")
     manifest.save()
     print(f"Manifest: {manifest.path}")

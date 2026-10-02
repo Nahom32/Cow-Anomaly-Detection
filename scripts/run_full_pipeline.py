@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import torch
 import yaml
-from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, SubsetRandomSampler, TensorDataset
 
 from scripts.config import CONFIG
@@ -18,6 +17,7 @@ from scripts.data.create_yolo_dataset import create_yolo_dataset
 from scripts.data.download_dataset import download_dataset
 from scripts.data.feature_cache import open_run_feature_cache
 from scripts.data.normalize import MinMaxNormalizer, ZScoreNormalizer
+from scripts.data.splits import describe, resolve_indices, resolve_split
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
 from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
@@ -159,21 +159,28 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     df.columns = ["video_id", "timestamp", "x1", "y1", "x2", "y2", "action_id", "target_id"]
 
     print("Extracting frame-level features...")
-    features = build_feature_dataset(
+    features, feature_video_ids = build_feature_dataset(
         df, frames_dir, feature_extractor,
         normal_action_ids=config["normal_action_ids"], device=device,
         feature_cache=feature_cache,
     )
     print(f"Extracted {features.shape[0]} features, dim={features.shape[1]}")
 
-    # Split the *indices*, not the rows, so the assignment can be hashed into the
-    # manifest. train_test_split permutes identically either way, so this is the
-    # same split as before — but now it is auditable. It is still a random row
-    # split and therefore still leaks; Phase 1.3 replaces it.
-    all_idx = np.arange(features.shape[0])
-    train_idx, val_idx = train_test_split(
-        all_idx, test_size=config["val_split"], random_state=config["random_seed"]
+    # The canonical split (1.3, 1.4). Read from the run's split manifest if a stage
+    # already drew it, so both models train on the same partition; drawn from `df`
+    # and persisted if this is the first stage to need it. Grouped, so consecutive
+    # frames of one cow cannot straddle the split.
+    assignment = resolve_split(
+        output_dir, df,
+        val_split=config["val_split"], test_split=config.get("test_split", 0.0),
+        random_seed=config["random_seed"], group_key=config["split_group_key"],
     )
+    print(
+        f"Split by {config['split_group_key']}: "
+        + ", ".join(f"{name}={len(assignment[name])}" for name in ("train", "val", "test"))
+    )
+    row_split = resolve_indices(assignment, feature_video_ids)
+    train_idx, val_idx = row_split["train"], row_split["val"]
 
     # Fit the normalizer on the training rows only (1.1). Fitting on `features`
     # normalized every val sample using its own extremes, which is the leak
@@ -208,9 +215,17 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
         manifest.record_array("flat_vae_feature_min", normalizer.min_)
         manifest.record_array("flat_vae_feature_max", normalizer.max_)
         manifest.record_split("flat_vae_rows", {"train": sorted(train_idx.tolist()), "val": sorted(val_idx.tolist())})
+        # The canonical manifest, recorded again under the name every stage uses, so
+        # a resumed run can prove both models read the same partition rather than
+        # merely having written files into the same directory.
+        manifest.record_split("canonical_groups", {
+            name: sorted(map(str, assignment[name])) for name in ("train", "val", "test")
+        })
         manifest.record_step(
             6,
             config_hash=hash_json(config),
+            split_group_key=config["split_group_key"],
+            split_sha256=describe(assignment)["sha256"],
             n_features=int(features.shape[0]),
             n_train=int(X_train.shape[0]),
             n_val=int(X_val.shape[0]),
@@ -241,17 +256,31 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
     )
     print(f"Total sequences: {len(seq_dataset)}")
 
-    # Split by video *before* computing the statistics (1.2). Fitting mean/std
-    # over every sequence in the run let each val window contribute to the
-    # numbers it was then normalized by.
-    video_ids = list(set(key[0] for key in seq_dataset.tracks.keys()))
-    train_vids, val_vids = train_test_split(
-        video_ids, test_size=config["val_split"], random_state=config["random_seed"]
+    # The same canonical split the flat VAE read (1.4). It used to be redrawn here
+    # from `set(...)`, whose iteration order is not stable across processes, so the
+    # two models were trained on different partitions of the same videos and no
+    # Flat-vs-LSTM comparison meant anything.
+    assignment = resolve_split(
+        output_dir, df,
+        val_split=config["val_split"], test_split=config.get("test_split", 0.0),
+        random_seed=config["random_seed"], group_key=config["split_group_key"],
     )
+    print(
+        f"Split by {config['split_group_key']}: "
+        + ", ".join(f"{name}={len(assignment[name])}" for name in ("train", "val", "test"))
+    )
+    # Tracks are keyed `(video_id, target_id)`, so which half of the key is the split
+    # unit depends on the configured group key. `target_id` is the stricter unit: a
+    # cow cannot reach val through a different video.
+    track_key_index = 0 if config["split_group_key"] == "video_id" else 1
+    sequence_groups = [str(key[track_key_index]) for key, _ in seq_dataset.sequences]
+    sequence_split = resolve_indices(assignment, sequence_groups)
+    train_indices = sequence_split["train"].tolist()
+    val_indices = sequence_split["val"].tolist()
 
-    train_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in train_vids]
-    val_indices = [i for i, (key, _) in enumerate(seq_dataset.sequences) if key[0] in val_vids]
-
+    # Compute the statistics from the training sequences only (1.2). Fitting mean/std
+    # over every sequence in the run let each val window contribute to the numbers it
+    # was then normalized by.
     print("Computing normalisation statistics from the training sequences...")
     normalizer = ZScoreNormalizer().fit(seq_dataset.stack(train_indices))
     mean, std = normalizer.mean_, normalizer.std_
@@ -290,21 +319,26 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
     np.save(os.path.join(output_dir, "lstm_vae_feature_mean.npy"), mean)
     np.save(os.path.join(output_dir, "lstm_vae_feature_std.npy"), std)
     if manifest is not None:
-        # The video-level split is the one thing that keeps windows from the
-        # same cow appearing in both train and val, so it gets recorded by hash.
-        manifest.record_split(
-            "lstm_vae_videos",
-            {"train": sorted(map(str, train_vids)), "val": sorted(map(str, val_vids))},
-        )
+        # Same name and same content as step 6's record, so a mismatch between the
+        # two is a manifest diff rather than something a reader has to notice.
+        manifest.record_split("canonical_groups", {
+            name: sorted(map(str, assignment[name])) for name in ("train", "val", "test")
+        })
+        manifest.record_split("lstm_vae_groups", {
+            name: sorted({sequence_groups[i] for i in sequence_split[name]})
+            for name in ("train", "val", "test")
+        })
         manifest.record_array("lstm_vae_feature_mean", mean)
         manifest.record_array("lstm_vae_feature_std", std)
         manifest.record_step(
             7,
             config_hash=hash_json(config),
+            split_group_key=config["split_group_key"],
+            split_sha256=describe(assignment)["sha256"],
             n_sequences=len(seq_dataset),
             n_train=len(train_indices),
             n_val=len(val_indices),
-            n_videos=len(video_ids),
+            n_videos=len(set(sequence_groups)),
             normalizer_fit_on="train",
             weights_sha256=(manifest.data.get("artifacts", {}).get("yolo_weights", {}) or {}).get("sha256"),
         )

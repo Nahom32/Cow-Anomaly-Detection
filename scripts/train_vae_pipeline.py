@@ -3,12 +3,12 @@ import os
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 
 from scripts.data.build_features import build_feature_dataset
 from scripts.data.feature_cache import open_run_feature_cache
 from scripts.data.normalize import MinMaxNormalizer
+from scripts.data.splits import describe, resolve_indices, resolve_split
 from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.vae import VAE, plot_history, train_vae
@@ -28,13 +28,15 @@ def main():
     LR = 1e-3
     OUTPUT_DIR = "."
     SEED = 42
+    SPLIT_GROUP_KEY = "video_id"
 
     set_seed(SEED)
     print(f"Using device: {DEVICE}")
 
     config = {"model": "flat_vae", "seed": SEED, "epochs": EPOCHS, "batch_size": BATCH_SIZE,
               "lr": LR, "normal_action_ids": NORMAL_ACTION_IDS, "feature_layer": 9,
-              "val_split": 0.2, "yolo_weights": YOLO_MODEL_PATH}
+              "val_split": 0.2, "test_split": 0.0, "split_group_key": SPLIT_GROUP_KEY,
+              "yolo_weights": YOLO_MODEL_PATH}
     manifest = RunManifest.create(OUTPUT_DIR, config, seed=SEED, device=DEVICE)
     manifest.record_artifact("yolo_weights", YOLO_MODEL_PATH)
     manifest.record_artifact("annotations_csv", ANNOTATIONS_CSV)
@@ -48,16 +50,27 @@ def main():
     feature_cache = open_run_feature_cache(OUTPUT_DIR, YOLO_MODEL_PATH, layer_index=9)
 
     print("Extracting features from normal behaviour frames...")
-    features = build_feature_dataset(
+    features, feature_video_ids = build_feature_dataset(
         df, FRAMES_DIR, feature_extractor,
         normal_action_ids=NORMAL_ACTION_IDS, device=DEVICE,
         feature_cache=feature_cache,
     )
     print(f"Extracted {features.shape[0]} feature vectors of dimension {features.shape[1]}")
 
-    print("Splitting rows, then fitting normalisation on the training rows only...")
-    all_idx = np.arange(features.shape[0])
-    train_idx, val_idx = train_test_split(all_idx, test_size=0.2, random_state=SEED)
+    # The canonical split (1.3, 1.4): grouped, so consecutive frames of one cow
+    # cannot land on both sides, and shared with the other stages via the manifest
+    # rather than redrawn per entry point.
+    print("Splitting by video, then fitting normalisation on the training rows only...")
+    assignment = resolve_split(
+        OUTPUT_DIR, df, val_split=0.2, test_split=0.0,
+        random_seed=SEED, group_key=SPLIT_GROUP_KEY,
+    )
+    print(
+        f"Split by {SPLIT_GROUP_KEY}: "
+        + ", ".join(f"{name}={len(assignment[name])}" for name in ("train", "val", "test"))
+    )
+    row_split = resolve_indices(assignment, feature_video_ids)
+    train_idx, val_idx = row_split["train"], row_split["val"]
     # Fit after the split: min/max over the whole matrix normalizes each val
     # sample with its own extremes (1.1).
     normalizer = MinMaxNormalizer().fit(features[train_idx])
@@ -93,8 +106,13 @@ def main():
     manifest.record_array("flat_vae_feature_min", normalizer.min_)
     manifest.record_array("flat_vae_feature_max", normalizer.max_)
     manifest.record_split("flat_vae_rows", {"train": sorted(train_idx.tolist()), "val": sorted(val_idx.tolist())})
+    manifest.record_split("canonical_groups", {
+        name: sorted(map(str, assignment[name])) for name in ("train", "val", "test")
+    })
     manifest.record_step("flat_vae", config_hash=hash_json(config), n_features=int(features.shape[0]),
                          n_train=int(X_train.shape[0]), n_val=int(X_val.shape[0]),
+                         split_group_key=SPLIT_GROUP_KEY,
+                         split_sha256=describe(assignment)["sha256"],
                          normalizer_fit_on="train")
     manifest.save()
     print(f"Manifest: {manifest.path}")
