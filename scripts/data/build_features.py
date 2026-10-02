@@ -19,7 +19,12 @@ def build_feature_dataset(
     feature_cache=None,
     verbose=True,
 ):
-    """Frame-level features for every normal-action annotation row.
+    """Frame-level features for every normal-action annotation row, plus their videos.
+
+    Returns `(features, video_ids)`: a `(n_rows, dim)` matrix and the `video_id` of
+    each row, in the same order. The ids are load-bearing, not a convenience — a
+    split can only be grouped (1.3) if the caller can tell which video each row came
+    from, and returning a bare matrix is what forced the split down to row level.
 
     When `feature_cache` is given, rows already in it are read from disk and only
     the missing crops go through YOLO. Without one, an in-memory cache is used,
@@ -29,10 +34,12 @@ def build_feature_dataset(
         normal_action_ids = [0, 1, 2]
 
     keys = []
+    video_ids = []
     for _, row in df.iterrows():
         if row["action_id"] not in normal_action_ids:
             continue
         keys.append(row_feature_key(row, str(row["video_id"]), fps))
+        video_ids.append(str(row["video_id"]))
 
     if not keys:
         raise RuntimeError("no normal-action rows to extract features from")
@@ -53,4 +60,13 @@ def build_feature_dataset(
     rows = feature_cache.ensure(keys, extract_fn, verbose=verbose)
     valid = feature_cache.is_valid(rows)
     features = feature_cache.rows(rows)[valid]
-    return np.ascontiguousarray(features, dtype=np.float32)
+    # `valid` drops rows whose crop could not be extracted, so the ids must be
+    # filtered by the same mask or they would no longer line up with `features`.
+    kept_videos = np.array([video_ids[i] for i in np.flatnonzero(valid)], dtype=object)
+    if kept_videos.shape[0] != features.shape[0]:
+        raise RuntimeError(
+            f"video id count ({kept_videos.shape[0]}) does not match feature rows "
+            f"({features.shape[0]}); a grouped split over misaligned ids would silently "
+            "put the wrong video's frames on each side"
+        )
+    return np.ascontiguousarray(features, dtype=np.float32), kept_videos

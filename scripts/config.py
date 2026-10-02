@@ -2,7 +2,18 @@ CONFIG = {
     # Dataset
     "normal_action_ids": [0, 1, 2],
     "val_split": 0.2,
+    # 1.5 has not carved out a test set yet, so this stays 0. The key exists so
+    # turning it on is a config change, not a schema change.
+    "test_split": 0.0,
     "random_seed": 42,
+
+    # Split unit for the canonical train/val/test manifest (1.3, 1.4). Grouping on
+    # `video_id` stops consecutive frames of one cow straddling the split; it does
+    # not stop the same cow appearing in train and val via a different video, because
+    # AVA cows recur across videos. `"target_id"` closes that gap but its reliability
+    # is unverified (tasklist Q1), so it is a value to switch once checked rather
+    # than an assumption to bake in.
+    "split_group_key": "video_id",
 
     # YOLO training. Nested because there are two dozen of them; a config key
     # that no entry point reads is a lie, so the trainers take this dict as-is.
