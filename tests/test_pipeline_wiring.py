@@ -12,6 +12,7 @@ import sys
 
 import pytest
 
+from scripts.data.splits import split_params
 from scripts.manifest import RunManifest
 from scripts.run_full_pipeline import is_step_done, main, step_flat_vae, step_lstm_vae
 from scripts.utils.hashing import hash_json
@@ -173,6 +174,47 @@ def test_is_step_done_ignores_the_manifest_when_no_config_is_given(tmp_path):
     """Backwards-compatible call form: existence only."""
     (tmp_path / "lstm_vae_model.pth").write_bytes(b"weights")
     assert is_step_done(7, {}, str(tmp_path)) is True
+
+
+# ── The detector's split (1.6, 1.7) ───────────────────────────────────────
+
+
+def test_is_step_done_rejects_a_dataset_built_under_another_split(tmp_path):
+    """1.6: existence alone would hand a test_split run a dataset drawn without it.
+
+    The two partitions would then disagree while both looking perfectly healthy
+    on disk — the exact silent divergence 1.6 exists to prevent.
+    """
+    config = {"random_seed": 42, "val_split": 0.2, "test_split": 0.1, "split_group_key": "video_id"}
+    (tmp_path / "yolo_dataset" / "train" / "images").mkdir(parents=True)
+    state = {"yolo_data_dir": str(tmp_path / "yolo_dataset")}
+
+    manifest = RunManifest.create(tmp_path, config, seed=42)
+    assert is_step_done(2, state, str(tmp_path), config, manifest) is False, (
+        "an unrecorded dataset cannot be verified — rebuild rather than trust it"
+    )
+
+    manifest.record_step(2, config_hash=hash_json(config), split_params=split_params(config))
+    assert is_step_done(2, state, str(tmp_path), config, manifest) is True
+
+    # Same directory on disk, but the run now asks for a different partition.
+    changed = {**config, "test_split": 0.2}
+    assert is_step_done(2, state, str(tmp_path), changed, manifest) is False
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["scripts.train_vae_pipeline", "scripts.train_lstm_vae_pipeline"],
+)
+def test_standalone_pipelines_draw_the_canonical_split_from_config(module):
+    """1.7: a hardcoded fraction here would diverge from the orchestrator's partition."""
+    mod = __import__(module, fromlist=["main"])
+    src = source_of(mod.main)
+    assert "split_params(CONFIG)" in src, "the split must be drawn with the run's config"
+    assert "resolve_split(" in src
+    assert "test_split=0.0" not in src, "the standalone must not disable the run's test split"
+    assert "GroupShuffleSplit" not in src
+    assert "train_test_split(" not in src
 
 
 def test_importing_the_orchestrator_does_not_pull_in_the_vision_stack():

@@ -18,9 +18,11 @@ import pytest
 import torch
 
 import scripts.run_full_pipeline as pipeline
+from scripts.config import CONFIG
+from scripts.data.feature_cache import FeatureCache, cache_signature, row_feature_key
 from scripts.data.normalize import MinMaxNormalizer, ZScoreNormalizer
 from scripts.data.splits import resolve_indices, resolve_split
-from scripts.run_full_pipeline import step_flat_vae
+from scripts.run_full_pipeline import step_flat_vae, step_lstm_vae
 from scripts.train_vae_pipeline import main as train_vae_main
 from scripts.utils.history import HISTORY_COLUMNS, empty_history
 
@@ -28,8 +30,12 @@ SEED = 42
 N_FEATURES = 60
 FEATURE_DIM = 4
 VAL_SPLIT = 0.25
-# `train_vae_pipeline.main` hardcodes its own 0.2 rather than reading CONFIG (9.1).
-STANDALONE_VAL_SPLIT = 0.2
+# The test slot, opt-in per test; with six videos this holds exactly one out.
+TEST_SPLIT = 0.1
+# Both entry points read their fractions from CONFIG now (1.7), so the expected
+# row sets must be drawn with the same numbers rather than with local copies.
+STANDALONE_VAL_SPLIT = CONFIG["val_split"]
+STANDALONE_TEST_SPLIT = CONFIG["test_split"]
 
 
 @pytest.fixture
@@ -297,14 +303,23 @@ def config(**overrides):
         "vae_lr": 1e-3,
         "vae_hidden_dim": 8,
         "vae_latent_dim": 2,
+        # `step_lstm_vae` reads these; small enough to run in milliseconds.
+        "seq_len": 4,
+        "seq_stride": 2,
+        "lstm_vae_epochs": 1,
+        "lstm_vae_batch_size": 8,
+        "lstm_vae_lr": 1e-3,
+        "lstm_vae_hidden_dim": 8,
+        "lstm_vae_latent_dim": 2,
+        "lstm_vae_num_layers": 1,
     }
     base.update(overrides)
     return base
 
 
-def grouped_split(features, video_ids, output_dir, val_split=VAL_SPLIT, seed=SEED,
-                  group_key="video_id"):
-    """The train/val row indices the pipeline's canonical split selects.
+def grouped_split(features, video_ids, output_dir, val_split=VAL_SPLIT, test_split=0.0,
+                  seed=SEED, group_key="video_id"):
+    """The split indices the pipeline's canonical split selects.
 
     Derived from the same `resolve_split`/`resolve_indices` the stage calls, rather
     than from an independent row shuffle, so these tests assert what the pipeline
@@ -313,11 +328,10 @@ def grouped_split(features, video_ids, output_dir, val_split=VAL_SPLIT, seed=SEE
     """
     df = pd.DataFrame({group_key: video_ids})
     assignment = resolve_split(
-        output_dir, df, val_split=val_split, test_split=0.0,
+        output_dir, df, val_split=val_split, test_split=test_split,
         random_seed=seed, group_key=group_key,
     )
-    indices = resolve_indices(assignment, video_ids)
-    return assignment, indices["train"], indices["val"]
+    return assignment, resolve_indices(assignment, video_ids)
 
 
 def _fake_train_loop(captured):
@@ -366,22 +380,52 @@ def run_step_flat_vae(tmp_path, feature_matrix, annotations_csv, video_ids=None,
     return captured, saved_min, saved_max
 
 
-def perturb_val_rows_only(matrix, val_split=VAL_SPLIT, seed=SEED, output_dir=None):
-    """Blow up the val rows, leaving every train row bit-identical."""
+def perturb_rows_only(matrix, split_name, val_split=VAL_SPLIT, test_split=0.0, seed=SEED,
+                      output_dir=None):
+    """Blow up the rows of one split, leaving every train row bit-identical."""
     video_ids = video_ids_for(matrix.shape[0])
     output_dir = output_dir or str(Path(tempfile.mkdtemp()) / "split")
-    _, train_idx, val_idx = grouped_split(
-        matrix, video_ids, output_dir, val_split=val_split, seed=seed
+    _, indices = grouped_split(
+        matrix, video_ids, output_dir, val_split=val_split, test_split=test_split, seed=seed
     )
+    held_out = indices[split_name]
     perturbed = matrix.copy()
-    perturbed[val_idx] += 1000.0
-    return perturbed, train_idx, val_idx
+    perturbed[held_out] += 1000.0
+    return perturbed, indices["train"], held_out
+
+
+def perturb_val_rows_only(matrix, val_split=VAL_SPLIT, test_split=0.0, seed=SEED, output_dir=None):
+    """Blow up the val rows, leaving every train row bit-identical."""
+    return perturb_rows_only(matrix, "val", val_split=val_split, test_split=test_split,
+                             seed=seed, output_dir=output_dir)
+
+
+def perturb_test_rows_only(matrix, val_split=VAL_SPLIT, test_split=TEST_SPLIT, seed=SEED,
+                           output_dir=None):
+    """Blow up the test rows: the slot no fit may ever read (1.5, 1.8)."""
+    return perturb_rows_only(matrix, "test", val_split=val_split, test_split=test_split,
+                             seed=seed, output_dir=output_dir)
+
+
+def perturb_held_out_rows(matrix, val_split=VAL_SPLIT, test_split=0.0, seed=SEED,
+                          output_dir=None):
+    """Blow up everything outside the train split, in one perturbation."""
+    video_ids = video_ids_for(matrix.shape[0])
+    output_dir = output_dir or str(Path(tempfile.mkdtemp()) / "split")
+    _, indices = grouped_split(
+        matrix, video_ids, output_dir, val_split=val_split, test_split=test_split, seed=seed
+    )
+    held_out = np.concatenate([indices["val"], indices["test"]])
+    perturbed = matrix.copy()
+    perturbed[held_out] += 1000.0
+    return perturbed, indices["train"], held_out
 
 
 def test_step_flat_vae_normalizer_ignores_val_rows(tmp_path, annotations_csv, features):
     """The persisted min/max must be the train extremes, not the global ones."""
     _, saved_min, saved_max = run_step_flat_vae(tmp_path, features, annotations_csv)
-    _, train_idx, _ = grouped_split(features, video_ids_for(), str(tmp_path / "expected"))
+    _, indices = grouped_split(features, video_ids_for(), str(tmp_path / "expected"))
+    train_idx = indices["train"]
 
     assert np.array_equal(saved_min, features[train_idx].min(axis=0))
     assert np.array_equal(saved_max, features[train_idx].max(axis=0))
@@ -441,6 +485,173 @@ def test_step_flat_vae_keeps_one_video_entirely_on_one_side(tmp_path, annotation
     )
 
 
+# ── The test split (1.5) ──────────────────────────────────────────────────
+#
+# With `test_split > 0` a third, never-trained-on partition exists. The fit must
+# ignore it exactly as it ignores val — and unlike val, those rows are also read
+# once at scoring time, so a silent fit on them would surface as a suspiciously
+# good held-out number rather than as an error.
+
+
+def test_step_flat_vae_saved_scaler_is_test_invariant(tmp_path, annotations_csv, features):
+    """Perturbing the test rows must not move the fitted min/max."""
+    a_min, a_max = run_step_flat_vae(
+        tmp_path / "a", features, annotations_csv, test_split=TEST_SPLIT
+    )[1:]
+    perturbed, _, _ = perturb_test_rows_only(features, test_split=TEST_SPLIT)
+    b_min, b_max = run_step_flat_vae(
+        tmp_path / "b", perturbed, annotations_csv, test_split=TEST_SPLIT
+    )[1:]
+
+    assert np.array_equal(a_min, b_min)
+    assert np.array_equal(a_max, b_max)
+
+
+def test_step_flat_vae_train_data_is_invariant_to_test_perturbation(
+    tmp_path, annotations_csv, features
+):
+    """A test row arbitrarily far from the rest must not move the training tensors."""
+    a, _, _ = run_step_flat_vae(tmp_path / "a", features, annotations_csv, test_split=TEST_SPLIT)
+    perturbed, _, test_idx = perturb_test_rows_only(features, test_split=TEST_SPLIT)
+    b, _, _ = run_step_flat_vae(tmp_path / "b", perturbed, annotations_csv, test_split=TEST_SPLIT)
+
+    assert test_idx.size > 0, "the test split must be non-empty for this to mean anything"
+    assert torch.equal(a["train"], b["train"]), "test rows leaked into the training tensors"
+    # Control: the perturbation was confined to test rows, so val is untouched.
+    assert torch.equal(a["val"], b["val"])
+
+
+def test_a_test_split_with_no_feature_rows_is_rejected(tmp_path, annotations_csv, features):
+    """An empty coverage cell must raise, not summarize (1.5)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    reread = pd.read_csv(annotations_csv, header=None, dtype={0: str})
+    reread.columns = ["video_id", "timestamp", "x1", "y1", "x2", "y2", "action_id", "target_id"]
+    # Draw the canonical split first so the stage re-reads the same one, then
+    # strip the test video's feature rows — the coverage gap the guard exists for.
+    assignment = resolve_split(
+        str(out), reread, val_split=VAL_SPLIT, test_split=TEST_SPLIT,
+        random_seed=SEED, group_key="video_id",
+    )
+    test_videos = set(assignment["test"])
+    video_ids = video_ids_for()
+    keep = [i for i, video_id in enumerate(video_ids) if video_id not in test_videos]
+
+    with pytest.raises(RuntimeError, match="no feature rows"):
+        run_step_flat_vae(
+            tmp_path, features[keep], annotations_csv,
+            video_ids=[video_ids[i] for i in keep],
+            test_split=TEST_SPLIT,
+        )
+
+
+# ── The LSTM-VAE call site (1.2) ──────────────────────────────────────────
+#
+# The z-score twin of the flat tests: `mean`/`std` must be computed from the
+# training windows only. These run `step_lstm_vae` for real with a pre-warmed
+# feature cache and a stubbed training loop, then perturb every held-out window
+# and assert the persisted statistics do not move.
+
+
+@pytest.fixture
+def lstm_annotations_csv(tmp_path):
+    """A constant `target_id`, so each video is exactly one 10-frame track."""
+    path = tmp_path / "lstm_annotations.csv"
+    rows = [f"v{i // 10},{i * 0.04},0.1,0.1,0.5,0.5,0,0" for i in range(N_FEATURES)]
+    path.write_text("\n".join(rows))
+    return str(path)
+
+
+def _fake_lstm_train(captured):
+    def fake_train_lstm_vae(vae, train_loader, val_loader, epochs, lr, device):
+        def rows(loader):
+            # TensorDataset yields `(tensor,)` batches, the sequence dataset
+            # bare tensors; indexing a bare tensor would keep only its first row.
+            batches = [batch[0] if isinstance(batch, (list, tuple)) else batch
+                       for batch in loader]
+            return torch.cat(batches)
+
+        captured["train"] = rows(train_loader)
+        captured["val"] = rows(val_loader)
+        history = empty_history()
+        for _ in range(epochs):
+            for column in HISTORY_COLUMNS:
+                history[column].append(0.0)
+        return history
+
+    return fake_train_lstm_vae
+
+
+def run_step_lstm_vae(tmp_path, feature_matrix, annotations_csv, **config_overrides):
+    """Run step 7 for real, capturing exactly what the training loop receives."""
+    captured = {}
+    monkey = pytest.MonkeyPatch()
+
+    # Cache keys built exactly as the sequence dataset builds them (fps=25),
+    # one per annotation row, each carrying that row's feature vector.
+    reread = pd.read_csv(annotations_csv, header=None, dtype={0: str})
+    reread.columns = ["video_id", "timestamp", "x1", "y1", "x2", "y2", "action_id", "target_id"]
+    keys = [row_feature_key(row, str(row["video_id"])) for _, row in reread.iterrows()]
+    index_of = {key: i for i, key in enumerate(keys)}
+    cache = FeatureCache(directory=None, signature=cache_signature("test-weights"))
+    cache.ensure(keys, lambda key: feature_matrix[index_of[key]], verbose=False)
+
+    monkey.setattr(pipeline, "train_lstm_vae", _fake_lstm_train(captured))
+    # The stage hardcodes `input_dim=256` (task 2.12, Phase 2) while these
+    # features are FEATURE_DIM-wide; the factory matches the model to the data
+    # so the real scoring pass can run. The normalisation under test does not
+    # depend on the model's width.
+    real_lstm_vae = pipeline.LSTMVAE
+    monkey.setattr(
+        pipeline, "LSTMVAE",
+        lambda input_dim, hidden_dim, latent_dim, num_layers:
+            real_lstm_vae(FEATURE_DIM, hidden_dim, latent_dim, num_layers),
+    )
+    try:
+        step_lstm_vae(
+            annotations_csv, str(tmp_path / "frames"), None, "cpu",
+            str(tmp_path / "out"), config(**config_overrides),
+            feature_cache=cache,
+        )
+    finally:
+        monkey.undo()
+
+    mean = np.load(tmp_path / "out" / "lstm_vae_feature_mean.npy")
+    std = np.load(tmp_path / "out" / "lstm_vae_feature_std.npy")
+    return captured, mean, std
+
+
+def test_step_lstm_vae_statistics_are_held_out_invariant(tmp_path, lstm_annotations_csv, features):
+    """1.2 end to end: no window outside train may move the z-score statistics."""
+    _, mean_a, std_a = run_step_lstm_vae(
+        tmp_path / "a", features, lstm_annotations_csv, test_split=TEST_SPLIT
+    )
+    perturbed, _, held_out = perturb_held_out_rows(features, test_split=TEST_SPLIT)
+    _, mean_b, std_b = run_step_lstm_vae(
+        tmp_path / "b", perturbed, lstm_annotations_csv, test_split=TEST_SPLIT
+    )
+
+    assert held_out.size > 0, "the held-out set must be non-empty for this to mean anything"
+    assert np.array_equal(mean_a, mean_b)
+    assert np.array_equal(std_a, std_b)
+
+
+def test_step_lstm_vae_statistics_centre_train_and_only_train(
+    tmp_path, lstm_annotations_csv, features
+):
+    """The loaders receive `(x - mean)/std`; a train fit zeroes *train* only."""
+    captured, mean, std = run_step_lstm_vae(
+        tmp_path, features, lstm_annotations_csv, test_split=TEST_SPLIT
+    )
+    train_flat = captured["train"].reshape(-1, FEATURE_DIM)
+    val_flat = captured["val"].reshape(-1, FEATURE_DIM)
+
+    assert np.allclose(train_flat.mean(axis=0), 0.0, atol=1e-5)
+    # A val-inclusive fit would have centred val the same way; held-out windows
+    # stay off-centre, which is what makes their score comparable to train's.
+    assert np.abs(val_flat.mean(axis=0)).max() > 1e-3
+
+
 # ── The standalone entry point ────────────────────────────────────────────
 #
 # `train_vae_pipeline.py` is a second, independent copy of the flat-VAE path and
@@ -475,10 +686,11 @@ def test_standalone_vae_normalizer_ignores_val_rows(monkeypatch, tmp_path, annot
     """Same assertion as the orchestrator, on the second copy of this code path."""
     monkeypatch.chdir(tmp_path)
     _, saved_min, saved_max = run_standalone_vae(monkeypatch, features, annotations_df)
-    _, train_idx, _ = grouped_split(
+    _, indices = grouped_split(
         features, video_ids_for(), str(tmp_path / "expected"),
-        val_split=STANDALONE_VAL_SPLIT,
+        val_split=STANDALONE_VAL_SPLIT, test_split=STANDALONE_TEST_SPLIT,
     )
+    train_idx = indices["train"]
 
     assert np.array_equal(saved_min, features[train_idx].min(axis=0))
     assert np.array_equal(saved_max, features[train_idx].max(axis=0))
@@ -486,7 +698,9 @@ def test_standalone_vae_normalizer_ignores_val_rows(monkeypatch, tmp_path, annot
 
 def test_standalone_vae_train_data_is_val_invariant(monkeypatch, tmp_path, annotations_df, features):
     monkeypatch.chdir(tmp_path)
-    perturbed, _, _ = perturb_val_rows_only(features, val_split=STANDALONE_VAL_SPLIT)
+    perturbed, _, _ = perturb_val_rows_only(
+        features, val_split=STANDALONE_VAL_SPLIT, test_split=STANDALONE_TEST_SPLIT
+    )
 
     before = run_standalone_vae(monkeypatch, features, annotations_df)
     after = run_standalone_vae(monkeypatch, perturbed, annotations_df)

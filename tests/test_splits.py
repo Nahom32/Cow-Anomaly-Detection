@@ -346,6 +346,10 @@ def _pipeline_config(**overrides):
 
 @pytest.fixture
 def two_stage_run(tmp_path):
+    return run_two_stages(tmp_path)
+
+
+def run_two_stages(tmp_path, **config_overrides):
     """Run `step_flat_vae` then `step_lstm_vae` into one output dir.
 
     Vision-stack work is stubbed: `build_feature_dataset` returns a feature block with
@@ -384,10 +388,15 @@ def two_stage_run(tmp_path):
 
     def record(module, name, captured):
         def fake_train(model, train_loader, val_loader, epochs, lr, device):
-            captured[name] = {
-                "train": torch.cat([batch[0] for batch in train_loader]).numpy(),
-                "val": torch.cat([batch[0] for batch in val_loader]).numpy(),
-            }
+            def rows(loader):
+                # TensorDataset yields `(tensor,)` batches, the sequence dataset
+                # bare tensors; indexing a bare tensor would keep only its first
+                # row and report a sample count that is really a batch count.
+                batches = [batch[0] if isinstance(batch, (list, tuple)) else batch
+                           for batch in loader]
+                return torch.cat(batches).numpy()
+
+            captured[name] = {"train": rows(train_loader), "val": rows(val_loader)}
             history = empty_history()
             for _ in range(epochs):
                 for column in HISTORY_COLUMNS:
@@ -399,7 +408,7 @@ def two_stage_run(tmp_path):
         return monkey
 
     captured = {}
-    config = _pipeline_config()
+    config = _pipeline_config(**config_overrides)
     manifest = pipeline.RunManifest.create(str(out), config, seed=SEED, device="cpu")
 
     monkey = pytest.MonkeyPatch()
@@ -418,6 +427,15 @@ def two_stage_run(tmp_path):
     # `feature_cache=None`, so the pre-warmed one is injected here for both.
     monkey.setattr(pipeline, "CowSequenceDataset", with_cache(real_sequence_dataset))
     monkey.setattr(pipeline, "NormalisedSeqDataset", with_cache(real_normalised_dataset))
+    # The stage hardcodes `input_dim=256` (task 2.12) but this fixture's features
+    # are FEATURE_DIM-wide; the factory matches the model to the data so the real
+    # scoring pass in step 7 can run.
+    real_lstm_vae = pipeline.LSTMVAE
+    monkey.setattr(
+        pipeline, "LSTMVAE",
+        lambda input_dim, hidden_dim, latent_dim, num_layers:
+            real_lstm_vae(FEATURE_DIM, hidden_dim, latent_dim, num_layers),
+    )
     for name in ("train_vae", "train_lstm_vae"):
         patch = record(pipeline, name, captured)
         try:
@@ -531,3 +549,89 @@ def test_no_video_appears_on_both_sides_in_either_stage(two_stage_run):
         assert captured[name]["val"].shape[0] > 0
         # Every sequence belongs to a video, so no stage can be scoring only train rows.
         assert captured[name]["train"].shape[0] + captured[name]["val"].shape[0] > 0
+
+# ── 1.5: a real test split, scored once, never trained on ───────────────────
+#
+# With `test_split = 0` the third slot existed but was always empty, so the
+# number the pipeline reported was the val number — the same number it had
+# watched during training. These run both stages with the test split turned on
+# and check that the protocol holds: test videos are assigned, neither loader
+# sees them, and the per-split score report includes them.
+
+WINDOWS_PER_VIDEO = (ROWS_PER_VIDEO - SEQ_LEN) // SEQ_STRIDE + 1  # starts at 0, 2, ..., 8
+
+
+def test_turning_on_the_test_split_holds_test_videos_out_of_both_stages(tmp_path):
+    run = run_two_stages(tmp_path, test_split=0.1)
+    payload = load_split(run["out"])
+
+    n_test = len(payload["assignment"]["test"])
+    assert n_test == pytest.approx(0.1 * N_VIDEOS, abs=1)
+    assert n_test > 0, "1.5 exists to make the test split non-empty"
+    assert not set(payload["assignment"]["test"]) & set(payload["assignment"]["train"])
+    assert not set(payload["assignment"]["test"]) & set(payload["assignment"]["val"])
+
+    # Every row and every window of the test videos is absent from both loaders.
+    captured = run["captured"]
+    expected_train_rows = len(payload["assignment"]["train"]) * ROWS_PER_VIDEO
+    expected_val_rows = len(payload["assignment"]["val"]) * ROWS_PER_VIDEO
+    assert captured["train_vae"]["train"].shape[0] == expected_train_rows
+    assert captured["train_vae"]["val"].shape[0] == expected_val_rows
+    assert captured["train_vae"]["train"].shape[0] + captured["train_vae"]["val"].shape[0] < (
+        N_VIDEOS * ROWS_PER_VIDEO
+    ), "the flat VAE trained on rows the test split owns"
+
+    expected_train_windows = len(payload["assignment"]["train"]) * WINDOWS_PER_VIDEO
+    expected_val_windows = len(payload["assignment"]["val"]) * WINDOWS_PER_VIDEO
+    assert captured["train_lstm_vae"]["train"].shape[0] == expected_train_windows
+    assert captured["train_lstm_vae"]["val"].shape[0] == expected_val_windows
+    assert captured["train_lstm_vae"]["train"].shape[0] + captured["train_lstm_vae"]["val"].shape[0] < (
+        N_VIDEOS * WINDOWS_PER_VIDEO
+    ), "the LSTM-VAE trained on windows the test split owns"
+
+
+def test_both_stages_record_the_test_split_they_used(tmp_path):
+    run = run_two_stages(tmp_path, test_split=0.1)
+    steps = run["manifest"].data["steps"]
+    payload = load_split(run["out"])
+
+    assert steps["6"]["n_test"] == len(payload["assignment"]["test"]) * ROWS_PER_VIDEO
+    assert steps["7"]["n_test"] == len(payload["assignment"]["test"]) * WINDOWS_PER_VIDEO
+    # Same partition reported by both stages and by the file on disk (1.4), now
+    # with a non-empty third slot.
+    assert steps["6"]["split_sha256"] == steps["7"]["split_sha256"]
+    canonical = run["manifest"].data["splits"]["canonical_groups"]
+    assert canonical["sizes"]["test"] == len(payload["assignment"]["test"])
+
+
+def test_the_test_split_is_scored_in_both_reports(tmp_path):
+    """The score file is 1.5's product: train, val and test, all three present."""
+    run = run_two_stages(tmp_path, test_split=0.1)
+    payload = load_split(run["out"])
+    n_test_videos = len(payload["assignment"]["test"])
+
+    with open(os.path.join(run["out"], "flat_vae_split_scores.json")) as handle:
+        flat = json.load(handle)
+    assert flat["metric"] == "per_sample_mse"
+    assert flat["normalizer_fit_on"] == "train"
+    assert set(flat["splits"]) == {"train", "val", "test"}
+    assert flat["splits"]["test"]["n"] == n_test_videos * ROWS_PER_VIDEO
+    for name in ("train", "val", "test"):
+        assert flat["splits"][name]["mean"] >= 0.0
+
+    with open(os.path.join(run["out"], "lstm_vae_split_scores.json")) as handle:
+        lstm = json.load(handle)
+    assert set(lstm["splits"]) == {"train", "val", "test"}
+    assert lstm["splits"]["test"]["n"] == n_test_videos * WINDOWS_PER_VIDEO
+    # The counts are what make this the *held-out* rows that were scored rather
+    # than a leftover from the train pass.
+    assert lstm["splits"]["test"]["n"] > 0
+
+
+def test_a_disabled_test_split_is_left_out_of_the_report(tmp_path):
+    """`test_split = 0` scores train and val only — an empty slot is not a zero."""
+    run = run_two_stages(tmp_path, test_split=0.0)
+
+    with open(os.path.join(run["out"], "flat_vae_split_scores.json")) as handle:
+        flat = json.load(handle)
+    assert set(flat["splits"]) == {"train", "val"}
