@@ -79,12 +79,12 @@ python -m scripts.run_full_pipeline --force
 | Step | Description |
 |------|-------------|
 | 1 | Download CBVD-5 dataset from Kaggle |
-| 2 | Build YOLO-format dataset (images + labels, train/val split by video ID) |
+| 2 | Build YOLO-format dataset (images + labels, train/val/test split from the run's canonical manifest) |
 | 3 | Generate `data.yaml` for YOLO training |
 | 4 | Train YOLO26n (150 epochs) → produces `best.pt` weights |
 | 5 | Create feature extractor from trained YOLO backbone (SPPF layer 9) |
-| 6 | Flat VAE: extract frame features → split → min-max normalise (train-fitted) → train → save model |
-| 7 | LSTM-VAE: build temporal sequences → z-score normalise → train → save model |
+| 6 | Flat VAE: extract frame features → split → min-max normalise (train-fitted) → train → score train/val/test |
+| 7 | LSTM-VAE: build temporal sequences → z-score normalise (train-fitted) → train → score train/val/test |
 
 ### Pipeline outputs
 
@@ -100,15 +100,19 @@ All artifacts are saved to `pipeline_output/`:
 | `flat_vae_feature_max.npy` | Per-feature max, fitted on the train split only |
 | `lstm_vae_model.pth` | Trained LSTM-VAE state dict |
 | `lstm_vae_history.csv` | Training loss history (recon and KL logged separately) |
-| `lstm_vae_feature_mean.npy` | Mean values for feature normalisation |
-| `lstm_vae_feature_std.npy` | Std values for feature normalisation |
+| `lstm_vae_feature_mean.npy` | Mean values for feature normalisation (train-fitted) |
+| `lstm_vae_feature_std.npy` | Std values for feature normalisation (train-fitted) |
+| `flat_vae_split_scores.json` | Per-sample reconstruction MSE for train/val/test |
+| `lstm_vae_split_scores.json` | Per-window reconstruction MSE for train/val/test |
+| `split_manifest.json` | The canonical `{video_id -> train|val|test}` assignment every stage reads |
 | `run_manifest.json` | Provenance for the run: git SHA, config hash, seed, feature hashes |
 
-> **Still leaking.** The flat VAE's min/max is now fitted on the training rows
-> only. The LSTM-VAE's mean/std is still computed over *every* sequence in the
-> run, and both models still split at frame/video level rather than by cow
-> identity. See `tasklist.md` tasks 1.2–1.4. Numbers from this pipeline are not
-> yet publishable.
+> **Not yet a benchmark.** Phase 1 is in: the split is grouped, three-way
+> (`CONFIG["test_split"] = 0.1`), shared by the detector and both VAEs, and every
+> normaliser is fitted on train only. The split-score files are honest held-out
+> reconstruction errors, but there are no anomaly scores, thresholds or AUROC yet —
+> that harness is Phase 4, and ground truth is an open problem (`tasklist.md` #25).
+> Until then these numbers describe fit, not detection.
 
 ### Run manifest
 

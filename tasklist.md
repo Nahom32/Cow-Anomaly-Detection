@@ -100,8 +100,8 @@ Directly addresses problems #4, #5 and `improvements_on_vad.md:304-308`.
       `normalizer_fit_on="train"` plus the min/max array hashes. Guarded by
       `tests/test_normalization.py`, which drives `step_flat_vae` and `train_vae_pipeline.main` for
       real and asserts the train tensors and the saved scaler are bit-identical when only the val
-      rows are perturbed by +1000. This is the min/max half of 1.8; the mean/std, PCA and
-      covariance cases land with 1.2/4.3.
+      rows are perturbed by +1000. This is the min/max half of 1.8; the mean/std and
+      test-split cases landed with 1.2/1.8, and PCA and covariance land with 4.3.
 - [x] **1.2** Same fix for the LSTM-VAE z-score. Mean/std are computed over **all** sequences
       (`run_full_pipeline.py:198-203`, `train_lstm_vae_pipeline.py:47-54`) before the video split at
       `:217-223`. Fit on train sequences only. `NormalisedSeqDataset` already takes `mean`/`std` as
@@ -155,32 +155,64 @@ Directly addresses problems #4, #5 and `improvements_on_vad.md:304-308`.
       `tests/test_splits.py`, which runs both real stages into one output dir and compares
       both stages' recorded hashes against the file on disk — comparing the two stages to
       each other would not catch a stage that redrew its own split and recorded that.
-- [ ] **1.5** Create a **test set**. Currently train/val only, and val doubles as the reported
+- [x] **1.5** Create a **test set**. Currently train/val only, and val doubles as the reported
       number. Introduce the three-way protocol from `problems_observed.md:339-349` and
       `improvements_on_vad.md:304-308`: train → val → **threshold selection** → test.
-      **Scaffolded by 1.3/1.4, not done** — `CONFIG["test_split"]` and the third slot exist
-      (`build_split` carves test out before val so the reported val fraction is not inflated,
-      and both draws use offset seeds), and every stage already resolves and records all three
-      splits. What is missing is a non-zero `test_split` and anything that *scores* on test;
-      until then `test` is empty and the number still reported is the val number.
-- [ ] **1.6** Propagate the detector-stage grouping. `create_yolo_dataset.py:70-73` is the **only**
+      **Done** — `CONFIG["test_split"] = 0.1`, carving test out before val so the reported val
+      fraction is not inflated (72/18/10 videos at the current data size). Both VAE stages now
+      *score* all three splits after training: per-sample reconstruction MSE through the
+      deterministic `encode().mu → decode()` route (never `forward`, whose sampled z would make
+      the held-out number move between reruns), transformed with the train-fitted normalizer and
+      written to `flat_vae_split_scores.json` / `lstm_vae_split_scores.json` via
+      `scripts/evaluation/reconstruction.py`. Test rows are read exactly once — never by `fit`,
+      never by a loader — and a `test_split > 0` that resolves to zero rows raises instead of
+      reporting from an empty set. The manifest records `n_test` per stage. Threshold selection
+      and AUROC are deliberately absent (Phase 4.6/6; ground truth is problem #25). Guarded by
+      `tests/test_evaluation.py` (determinism, mean-not-sum, empty slots reported as `{"n": 0}`
+      and dropped rather than written as a score of zero) and the three-way tests in
+      `tests/test_splits.py`.
+- [x] **1.6** Propagate the detector-stage grouping. `create_yolo_dataset.py:70-73` is the **only**
       grouped split in the repo (verified: 392 train / 99 val videos, zero overlap) and it is not
       carried into the VAE stage.
-      **Now partly actionable** — 1.4 gives the VAE stages a canonical manifest to conform to,
-      so this is a matter of `create_yolo_dataset` consuming `resolve_split` instead of drawing
-      its own, which also settles 1.7. Note the two currently disagree on more than the VAE
-      stages did: the YOLO split groups on `video_id` (and with a different seed and fraction
-      path than `GroupShuffleSplit` uses), so after this lands the detector and the features it
-      produced will have been trained and split under different partitions.
-- [ ] **1.7** Pass `CONFIG["random_seed"]` / `CONFIG["val_split"]` through. `step_create_yolo_dataset`
+      **Done** — `create_yolo_dataset` now calls `resolve_split` and adopts the run's
+      `split_manifest.json` (drawn from the full annotation frame, *before* the frames-on-disk
+      filter, so the manifest stays a superset of the row-level one the VAEs resolve). Its own
+      `GroupShuffleSplit` is gone: the detector, the features extracted from it and both VAEs
+      now train on one partition. Images are written into `train/` `val/` `test/` — only the
+      non-empty ones — with each image's video recorded directly rather than re-derived from
+      `image_key.split("_")[0]`, which breaks on video ids containing `_`. `data.yaml` names
+      `test` only when test images exist (a yaml pointing at an empty directory is a claim
+      about data that is not there), and both skip-checks became content checks: `is_step_done(2)`
+      compares the manifest's recorded `split_params` against the current config, and
+      `is_step_done(3)` diffs the yaml against what is on disk, so a dataset drawn under
+      `test_split=0` cannot be silently reused by a `test_split=0.1` run. Guarded by
+      `tests/test_yolo_dataset.py`, which builds a tiny frames tree and asserts exact per-split
+      image sets, the non-empty test slot, and that a video with no frames still gets an
+      assignment.
+- [x] **1.7** Pass `CONFIG["random_seed"]` / `CONFIG["val_split"]` through. `step_create_yolo_dataset`
       (`run_full_pipeline.py:87-93`) ignores both and falls back to module defaults.
-- [ ] **1.8** Regression test: assert that no statistic (min/max/mean/std/PCA/covariance) changes
+      **Done** — `split_params(config)` in `scripts/data/splits.py` is the single place that
+      turns a config into `resolve_split` kwargs (`val_split`, `test_split`, `random_seed`,
+      `group_key`), and every stage and entry point goes through it: both orchestrator stages,
+      `create_yolo_dataset` (which receives the run's config and output dir from step 2), and
+      both standalone pipelines, which read `CONFIG` instead of the hardcoded
+      `test_split: 0.0`/`val_split: 0.2` that would have made their "val" number a different
+      partition from the orchestrator's. Step 2 records its `split_params` in the manifest so
+      the staleness check in 1.6 has something to compare. Guarded by
+      `tests/test_pipeline_wiring.py` (source checks on both standalones plus a behavioural
+      `is_step_done(2)` staleness test) and the step-2 config-passing test in
+      `tests/test_yolo_dataset.py`.
+- [x] **1.8** Regression test: assert that no statistic (min/max/mean/std/PCA/covariance) changes
       when val/test rows are perturbed. This is the single highest-value test in the project, and
       Phase 4 must not reintroduce the same leak.
-      **Partially covered by 1.1** — `tests/test_normalization.py` already asserts the min/max case
-      against the real `step_flat_vae` and `train_vae_pipeline.main` call sites. What remains is
-      mean/std (1.2), PCA and covariance, which do not exist until Phase 4.3 adds those detectors,
-      and the test-split case, which does not exist until 1.5.
+      **Done for what exists** — `tests/test_normalization.py` now drives the *real* step
+      functions, not source order: perturbing only the test rows leaves `step_flat_vae`'s
+      saved min/max and train tensors bit-identical, and perturbing every held-out row leaves
+      `step_lstm_vae`'s persisted mean/std bit-identical, with a control asserting the loaders
+      centre train at zero while held-out windows stay off-centre (a val-inclusive fit would
+      have centred those too). The empty-coverage guard is tested end to end by stripping the
+      test video's feature rows and expecting a `RuntimeError`. PCA and covariance are the
+      Phase 4.3 detectors; the same perturbation pattern applies there unchanged.
 
 ---
 

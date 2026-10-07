@@ -18,7 +18,23 @@ later phase from re-introducing a bug an earlier one fixed.
 
 ## Current state
 
-Phase 0 (foundations & reproducibility) and tasks 1.1–1.4 are implemented: normalization is fitted on train only (min/max for the flat VAE, mean/std for the LSTM-VAE), and the split is grouped and canonical (`scripts/data/splits.py` draws it once from the annotation frame, persists it to `split_manifest.json`, and every stage resolves it from there). The rest of Phase 1 is not. In particular: **there is still no evaluation code, no anomaly-score function, and no test split** — `CONFIG["test_split"]` and the third slot exist but `test` is empty, so val is still the reported number (tasks 1.5). Grouping is on `video_id`, which does not stop one cow spanning train and val through different videos; `target_id` is available as the stricter key and Q1 decides whether to switch. `create_yolo_dataset` still draws its own split rather than consuming the manifest (1.6, 1.7). No number produced by this repo is publishable until Phase 1 lands.
+Phase 0 (foundations & reproducibility) and all of Phase 1 (tasks 1.1–1.8) are
+implemented: normalization is fitted on train only (min/max for the flat VAE,
+mean/std for the LSTM-VAE), the split is grouped and canonical
+(`scripts/data/splits.py` draws it once from the annotation frame, persists it
+to `split_manifest.json`, and every stage resolves it through
+`split_params(config)`), and the run is three-way — `CONFIG["test_split"] = 0.1`
+— with both VAE stages scoring train/val/test per-sample reconstruction MSE
+(`scripts/evaluation/reconstruction.py`) into `<model>_split_scores.json`. The
+detector consumes the same manifest: `create_yolo_dataset` no longer draws its
+own split, `data.yaml` names `test` only when test images exist, and steps 2/3
+are skipped on *content* (recorded split params, yaml vs dataset), not
+existence. Grouping is on `video_id`, which does not stop one cow spanning
+train and val through different videos; `target_id` is available as the
+stricter key and Q1 decides whether to switch. What is still missing is the
+evaluation harness itself — anomaly-score functions, thresholds, AUROC — which
+is Phase 4; until then the scores files are honest but unlabeled errors.
+Ground truth is problem #25.
 
 ## Commands
 
@@ -31,7 +47,7 @@ python -m scripts.run_full_pipeline --from-step 6      # re-run the VAE stages
 python -m scripts.run_full_pipeline --force --headless --seed 7
 
 ruff check scripts tests          # lint
-pytest -q                         # tests (~4s, no vision stack needed)
+pytest -q                         # tests (~15s, no vision stack needed)
 pytest tests/test_pipeline_wiring.py  # needs cv2 + ultralytics, skipped otherwise
 ```
 
@@ -46,7 +62,8 @@ scripts/
 ├── run_full_pipeline.py orchestrator; writes state + provenance to the output dir
 ├── utils/               cross-cutting helpers (seeding, io, hashing, history, plotting)
 ├── data/                dataset download, YOLO-format conversion, feature cache,
-│                        train-fitted scalers
+│                        train-fitted scalers, the canonical split
+├── evaluation/          per-split anomaly scores (Phase 4 builds on this)
 ├── dataset/             torch Datasets over cached features
 └── models/              feature extractor, VAE, LSTM-VAE, YOLO trainers
 tests/                   pytest suite; helpers.py holds shared fixtures/utilities
