@@ -5,10 +5,11 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
+from scripts.config import CONFIG
 from scripts.data.build_features import build_feature_dataset
 from scripts.data.feature_cache import open_run_feature_cache
 from scripts.data.normalize import MinMaxNormalizer
-from scripts.data.splits import describe, resolve_indices, resolve_split
+from scripts.data.splits import describe, resolve_indices, resolve_split, split_params
 from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.vae import VAE, plot_history, train_vae
@@ -27,15 +28,19 @@ def main():
     BATCH_SIZE = 64
     LR = 1e-3
     OUTPUT_DIR = "."
-    SEED = 42
-    SPLIT_GROUP_KEY = "video_id"
+    # Split parameters come from CONFIG like every other entry point (1.7): a
+    # hardcoded 0.2/0.0 here drew a *different* partition from the orchestrator
+    # and then reported it as if it were the same experiment (1.4).
+    SEED = CONFIG["random_seed"]
+    SPLIT_GROUP_KEY = CONFIG["split_group_key"]
 
     set_seed(SEED)
     print(f"Using device: {DEVICE}")
 
     config = {"model": "flat_vae", "seed": SEED, "epochs": EPOCHS, "batch_size": BATCH_SIZE,
               "lr": LR, "normal_action_ids": NORMAL_ACTION_IDS, "feature_layer": 9,
-              "val_split": 0.2, "test_split": 0.0, "split_group_key": SPLIT_GROUP_KEY,
+              "val_split": CONFIG["val_split"], "test_split": CONFIG["test_split"],
+              "split_group_key": SPLIT_GROUP_KEY,
               "yolo_weights": YOLO_MODEL_PATH}
     manifest = RunManifest.create(OUTPUT_DIR, config, seed=SEED, device=DEVICE)
     manifest.record_artifact("yolo_weights", YOLO_MODEL_PATH)
@@ -61,10 +66,7 @@ def main():
     # cannot land on both sides, and shared with the other stages via the manifest
     # rather than redrawn per entry point.
     print("Splitting by video, then fitting normalisation on the training rows only...")
-    assignment = resolve_split(
-        OUTPUT_DIR, df, val_split=0.2, test_split=0.0,
-        random_seed=SEED, group_key=SPLIT_GROUP_KEY,
-    )
+    assignment = resolve_split(OUTPUT_DIR, df, **split_params(CONFIG))
     print(
         f"Split by {SPLIT_GROUP_KEY}: "
         + ", ".join(f"{name}={len(assignment[name])}" for name in ("train", "val", "test"))

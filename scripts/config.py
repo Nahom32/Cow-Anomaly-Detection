@@ -1,10 +1,13 @@
 CONFIG = {
     # Dataset
     "normal_action_ids": [0, 1, 2],
+    # Fractions of the *remaining* groups after each earlier hold-out: test is
+    # carved first (1.5), then val, so the reported val fraction is not inflated
+    # by test rows. With these values the partition is 72/18/10. Val is the
+    # larger held-out set because it also picks thresholds later; test is scored
+    # once and never fitted on.
     "val_split": 0.2,
-    # 1.5 has not carved out a test set yet, so this stays 0. The key exists so
-    # turning it on is a config change, not a schema change.
-    "test_split": 0.0,
+    "test_split": 0.1,
     "random_seed": 42,
 
     # Split unit for the canonical train/val/test manifest (1.3, 1.4). Grouping on

@@ -186,10 +186,13 @@ class CowSequenceDataset(Dataset):
 
 
 class NormalisedSeqDataset(CowSequenceDataset):
-    """Z-scores each window with statistics that must be fitted on train only.
+    """Z-scores each window with statistics the caller fitted on train only.
 
-    `mean`/`std` are supplied by the caller — see task 1.2, they are currently
-    fitted over every sequence in the run rather than over the training split.
+    `mean`/`std` arrive as constructor arguments precisely because this class
+    must never derive them itself (task 1.2): a dataset that computed its own
+    statistics would fit on whatever it was handed — every sequence in the run,
+    val windows included — and then normalize each of those windows with numbers
+    they helped produce.
     """
 
     def __init__(self, mean, std, **kwargs):

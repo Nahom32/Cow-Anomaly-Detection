@@ -17,8 +17,13 @@ from scripts.data.create_yolo_dataset import create_yolo_dataset
 from scripts.data.download_dataset import download_dataset
 from scripts.data.feature_cache import open_run_feature_cache
 from scripts.data.normalize import MinMaxNormalizer, ZScoreNormalizer
-from scripts.data.splits import describe, resolve_indices, resolve_split
+from scripts.data.splits import describe, resolve_indices, resolve_split, split_params
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
+from scripts.evaluation.reconstruction import (
+    reconstruction_score_report,
+    row_reconstruction_errors,
+    window_reconstruction_errors,
+)
 from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
@@ -26,6 +31,7 @@ from scripts.models.train_yolo_n import train_yolo26n
 from scripts.models.vae import VAE, plot_history, train_vae
 from scripts.utils.hashing import hash_json, sha256_file
 from scripts.utils.history import save_history
+from scripts.utils.io import atomic_write_json
 from scripts.utils.plotting import setup_matplotlib
 from scripts.utils.seeding import set_seed
 
@@ -94,13 +100,43 @@ def step_download_dataset(output_dir, manifest=None):
     return {"data_root": data_root, "annotations_csv": annotations_csv, "frames_dir": frames_dir}
 
 
-def step_create_yolo_dataset(data_root, output_dir):
+def step_create_yolo_dataset(data_root, output_dir, config):
     print("\n" + "=" * 60)
     print("STEP 2: Creating YOLO dataset")
     print("=" * 60)
     yolo_data_dir = os.path.join(output_dir, "yolo_dataset")
-    create_yolo_dataset(output_dir=yolo_data_dir, data_root=data_root)
-    return {"yolo_data_dir": yolo_data_dir}
+    # The detector's split is the canonical manifest (1.6), written into the
+    # run's output directory so steps 6 and 7 adopt exactly this partition
+    # instead of resolving a second one. The config travels with it (1.7): the
+    # seed and fractions it is drawn under are the run's, not module defaults.
+    assignment = create_yolo_dataset(
+        output_dir=yolo_data_dir, data_root=data_root,
+        split_dir=output_dir, config=config,
+    )
+    return {
+        "yolo_data_dir": yolo_data_dir,
+        "yolo_split_sha256": describe(assignment)["sha256"],
+    }
+
+
+def _expected_data_yaml(yolo_data_dir):
+    """The `data.yaml` for this dataset — written by step 3, compared by `is_step_done(3)`.
+
+    The `test` key appears only when the test split actually has images: a yaml
+    pointing at an empty directory is a claim about data that is not there, and
+    a yaml written before 1.5 gave the run a test split must not count as done
+    (it would silently leave the detector with no test partition on disk).
+    """
+    content = {
+        "path": os.path.abspath(yolo_data_dir),
+        "train": "train/images",
+        "val": "val/images",
+        "names": {0: "cow"},
+    }
+    test_images = os.path.join(yolo_data_dir, "test", "images")
+    if os.path.isdir(test_images) and any(name.endswith(".jpg") for name in os.listdir(test_images)):
+        content["test"] = "test/images"
+    return content
 
 
 def step_create_yaml(yolo_data_dir):
@@ -108,12 +144,7 @@ def step_create_yaml(yolo_data_dir):
     print("STEP 3: Creating YOLO data YAML")
     print("=" * 60)
     yaml_path = os.path.join(yolo_data_dir, "data.yaml")
-    content = {
-        "path": os.path.abspath(yolo_data_dir),
-        "train": "train/images",
-        "val": "val/images",
-        "names": {0: "cow"},
-    }
+    content = _expected_data_yaml(yolo_data_dir)
     with open(yaml_path, "w") as f:
         yaml.dump(content, f, default_flow_style=False)
     print(f"Written: {yaml_path}")
@@ -166,21 +197,23 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     )
     print(f"Extracted {features.shape[0]} features, dim={features.shape[1]}")
 
-    # The canonical split (1.3, 1.4). Read from the run's split manifest if a stage
-    # already drew it, so both models train on the same partition; drawn from `df`
-    # and persisted if this is the first stage to need it. Grouped, so consecutive
+    # The canonical split (1.3, 1.4, 1.5). Read from the run's split manifest if a
+    # stage already drew it — including step 2, which now draws it for the detector
+    # too — so every model trains on the same partition. Grouped, so consecutive
     # frames of one cow cannot straddle the split.
-    assignment = resolve_split(
-        output_dir, df,
-        val_split=config["val_split"], test_split=config.get("test_split", 0.0),
-        random_seed=config["random_seed"], group_key=config["split_group_key"],
-    )
+    assignment = resolve_split(output_dir, df, **split_params(config))
     print(
         f"Split by {config['split_group_key']}: "
         + ", ".join(f"{name}={len(assignment[name])}" for name in ("train", "val", "test"))
     )
     row_split = resolve_indices(assignment, feature_video_ids)
-    train_idx, val_idx = row_split["train"], row_split["val"]
+    train_idx, val_idx, test_idx = row_split["train"], row_split["val"], row_split["test"]
+    if config["test_split"] > 0 and len(test_idx) == 0:
+        raise RuntimeError(
+            "test_split > 0 but no feature rows landed in the test split: those videos "
+            "produced no normal-action crops, so the held-out number would be reported "
+            "from an empty set. An empty coverage cell must be fixed, not summarized (1.5)."
+        )
 
     # Fit the normalizer on the training rows only (1.1). Fitting on `features`
     # normalized every val sample using its own extremes, which is the leak
@@ -206,6 +239,19 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     torch.save(vae.state_dict(), os.path.join(output_dir, "flat_vae_model.pth"))
     np.save(os.path.join(output_dir, "flat_vae_feature_min.npy"), normalizer.min_)
     np.save(os.path.join(output_dir, "flat_vae_feature_max.npy"), normalizer.max_)
+
+    # Score all three splits (1.5). This is the only place test rows are read:
+    # they are transformed with the *train* min/max and fed to the trained model
+    # once, after training — never to `fit`, never to a loader. The report is the
+    # three-way protocol's output: train (seen), val (monitored), test (held out).
+    errors = {
+        "train": row_reconstruction_errors(vae, X_train, device),
+        "val": row_reconstruction_errors(vae, X_val, device),
+        "test": row_reconstruction_errors(vae, features_norm[test_idx], device),
+    }
+    scores_path = os.path.join(output_dir, "flat_vae_split_scores.json")
+    atomic_write_json(scores_path, reconstruction_score_report("flat_vae", errors))
+
     plot_history(history, save_path=os.path.join(output_dir, "flat_vae_history.png"), headless=headless)
     if manifest is not None:
         manifest.record_array("flat_vae_features", features, n=features.shape[0], dim=features.shape[1])
@@ -214,7 +260,12 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
         manifest.record_array("flat_vae_val_rows", features_norm[val_idx])
         manifest.record_array("flat_vae_feature_min", normalizer.min_)
         manifest.record_array("flat_vae_feature_max", normalizer.max_)
-        manifest.record_split("flat_vae_rows", {"train": sorted(train_idx.tolist()), "val": sorted(val_idx.tolist())})
+        manifest.record_split("flat_vae_rows", {
+            "train": sorted(train_idx.tolist()),
+            "val": sorted(val_idx.tolist()),
+            "test": sorted(test_idx.tolist()),
+        })
+        manifest.record_artifact("flat_vae_split_scores", scores_path)
         # The canonical manifest, recorded again under the name every stage uses, so
         # a resumed run can prove both models read the same partition rather than
         # merely having written files into the same directory.
@@ -229,6 +280,7 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
             n_features=int(features.shape[0]),
             n_train=int(X_train.shape[0]),
             n_val=int(X_val.shape[0]),
+            n_test=int(test_idx.shape[0]),
             normalizer_fit_on="train",
             weights_sha256=(manifest.data.get("artifacts", {}).get("yolo_weights", {}) or {}).get("sha256"),
         )
@@ -256,15 +308,12 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
     )
     print(f"Total sequences: {len(seq_dataset)}")
 
-    # The same canonical split the flat VAE read (1.4). It used to be redrawn here
-    # from `set(...)`, whose iteration order is not stable across processes, so the
-    # two models were trained on different partitions of the same videos and no
-    # Flat-vs-LSTM comparison meant anything.
-    assignment = resolve_split(
-        output_dir, df,
-        val_split=config["val_split"], test_split=config.get("test_split", 0.0),
-        random_seed=config["random_seed"], group_key=config["split_group_key"],
-    )
+    # The same canonical split every other stage read, including step 2 for the
+    # detector (1.4, 1.6). It used to be redrawn here from `set(...)`, whose
+    # iteration order is not stable across processes, so the two models were
+    # trained on different partitions of the same videos and no Flat-vs-LSTM
+    # comparison meant anything.
+    assignment = resolve_split(output_dir, df, **split_params(config))
     print(
         f"Split by {config['split_group_key']}: "
         + ", ".join(f"{name}={len(assignment[name])}" for name in ("train", "val", "test"))
@@ -277,6 +326,13 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
     sequence_split = resolve_indices(assignment, sequence_groups)
     train_indices = sequence_split["train"].tolist()
     val_indices = sequence_split["val"].tolist()
+    test_indices = sequence_split["test"].tolist()
+    if config["test_split"] > 0 and not test_indices:
+        raise RuntimeError(
+            "test_split > 0 but no sequences fall in the test split: those videos "
+            "produced no usable windows, so the held-out number would be reported "
+            "from an empty set. An empty coverage cell must be fixed, not summarized (1.5)."
+        )
 
     # Compute the statistics from the training sequences only (1.2). Fitting mean/std
     # over every sequence in the run let each val window contribute to the numbers it
@@ -318,6 +374,23 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
     save_history(history, os.path.join(output_dir, "lstm_vae_history.csv"))
     np.save(os.path.join(output_dir, "lstm_vae_feature_mean.npy"), mean)
     np.save(os.path.join(output_dir, "lstm_vae_feature_std.npy"), std)
+
+    # Score all three splits (1.5). `norm_dataset.stack` applies exactly the
+    # train-fitted mean/std the loaders saw, and this is the only read of the
+    # test windows: after training, once, with nothing fitted on them.
+    errors = {
+        name: window_reconstruction_errors(
+            vae, norm_dataset.stack(indices) if indices else [], device
+        )
+        for name, indices in (
+            ("train", train_indices),
+            ("val", val_indices),
+            ("test", test_indices),
+        )
+    }
+    scores_path = os.path.join(output_dir, "lstm_vae_split_scores.json")
+    atomic_write_json(scores_path, reconstruction_score_report("lstm_vae", errors))
+
     if manifest is not None:
         # Same name and same content as step 6's record, so a mismatch between the
         # two is a manifest diff rather than something a reader has to notice.
@@ -330,6 +403,7 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
         })
         manifest.record_array("lstm_vae_feature_mean", mean)
         manifest.record_array("lstm_vae_feature_std", std)
+        manifest.record_artifact("lstm_vae_split_scores", scores_path)
         manifest.record_step(
             7,
             config_hash=hash_json(config),
@@ -338,6 +412,7 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
             n_sequences=len(seq_dataset),
             n_train=len(train_indices),
             n_val=len(val_indices),
+            n_test=len(test_indices),
             n_videos=len(set(sequence_groups)),
             normalizer_fit_on="train",
             weights_sha256=(manifest.data.get("artifacts", {}).get("yolo_weights", {}) or {}).get("sha256"),
@@ -359,9 +434,40 @@ def is_step_done(step, state, output_dir, config=None, manifest=None):
         return "data_root" in state and os.path.isdir(state["data_root"])
     if step == 2:
         d = state.get("yolo_data_dir", "")
-        return os.path.isdir(os.path.join(d, "train", "images"))
+        if not os.path.isdir(os.path.join(d, "train", "images")):
+            return False
+        if config is None or manifest is None:
+            return True
+        # The dataset's *content* is its split (1.6), so the recorded split
+        # params — not the directory's existence — decide whether it is current.
+        # An existence check would hand a test_split=0.1 run the dataset drawn
+        # under test_split=0, and the two partitions would then disagree while
+        # both looking perfectly healthy.
+        recorded = (manifest.step(2) or {}).get("split_params")
+        if recorded != split_params(config):
+            print(
+                "  the YOLO dataset on disk was built under a different split than the "
+                "current config asks for — rebuilding it (1.6)"
+            )
+            return False
+        return True
     if step == 3:
-        return os.path.isfile(state.get("data_yaml", ""))
+        path = state.get("data_yaml", "")
+        if not os.path.isfile(path):
+            return False
+        try:
+            with open(path) as handle:
+                written = yaml.safe_load(handle)
+        except (OSError, yaml.YAMLError):
+            return False
+        # The yaml names the split directories, so it is stale the moment the
+        # dataset gains or loses a test split (1.5). Compared as content rather
+        # than by existence, for the same reason step 2 records its split.
+        expected = _expected_data_yaml(state.get("yolo_data_dir", ""))
+        if written != expected:
+            print(f"  {path} no longer describes the dataset on disk — rewriting it")
+            return False
+        return True
     if step == 4:
         found = find_best_pt()
         if not found:
@@ -457,13 +563,19 @@ def main():
         manifest.save()
 
     # Step 2: YOLO dataset
-    if force_step <= 2 and is_step_done(2, state, output_dir):
+    if force_step <= 2 and is_step_done(2, state, output_dir, config, manifest):
         print(f"\n[SKIP] Step 2: YOLO dataset (already at {state['yolo_data_dir']})")
     else:
-        state.update(step_create_yolo_dataset(state["data_root"], output_dir))
+        state.update(step_create_yolo_dataset(state["data_root"], output_dir, config))
         state["last_step"] = 2
         save_state(output_dir, state)
-        manifest.record_step(2, config_hash=hash_json(config), yolo_data_dir=state["yolo_data_dir"])
+        manifest.record_step(
+            2,
+            config_hash=hash_json(config),
+            yolo_data_dir=state["yolo_data_dir"],
+            split_params=split_params(config),
+            split_sha256=state["yolo_split_sha256"],
+        )
         manifest.save()
 
     # Step 3: YAML

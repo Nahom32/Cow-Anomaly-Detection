@@ -40,6 +40,21 @@ SPLIT_NAMES = ("train", "val", "test")
 GROUP_KEYS = ("video_id", "target_id")
 
 
+def split_params(config):
+    """`resolve_split` keyword arguments taken straight from the config.
+
+    Every stage (detector and both VAEs) passes this, so one stage cannot honour
+    a different seed or fraction from another — that disagreement is exactly
+    1.4's bug arriving one call site at a time.
+    """
+    return {
+        "val_split": config["val_split"],
+        "test_split": config["test_split"],
+        "random_seed": config["random_seed"],
+        "group_key": config["split_group_key"],
+    }
+
+
 def row_groups(df, group_key):
     """The group label of every annotation row, as strings.
 
@@ -105,9 +120,10 @@ def build_split(df, val_split=0.2, test_split=0.0, random_seed=42, group_key="vi
     """`{split_name: [group, ...]}` from a two-stage grouped shuffle.
 
     Test is carved out first, so val is a fraction of what remains and the reported
-    val fraction is not inflated by test rows. `test_split` defaults to 0 because
-    1.5 has not created a test set yet; the key is still present, so 1.5 is a config
-    change rather than a schema change.
+    val fraction is not inflated by test rows. `test_split` defaults to 0 so a
+    caller can still draw a two-way split; `CONFIG["test_split"]` turns the test
+    set on (1.5), and a manifest drawn under different fractions than the config
+    asks for is rejected by `resolve_split` rather than honoured.
 
     The two draws use offset seeds (`random_seed`, `random_seed + 1`) so the same
     group cannot land in test and val as an artefact of two identical draws.
