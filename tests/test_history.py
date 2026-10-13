@@ -274,6 +274,21 @@ def test_unknown_scheduler_name_is_rejected():
         make_scheduler("cosine", optimizer)
 
 
+def test_lstm_training_without_validation_does_not_divide_by_zero():
+    """2.10: the flat VAE had `if val_loader:`; the LSTM-VAE did not."""
+    x = torch.randn(8, 3, 4, generator=torch.Generator().manual_seed(0))
+    loader = DataLoader(x, batch_size=4)
+
+    history = train_lstm_vae(
+        LSTMVAE(input_dim=4, hidden_dim=8, latent_dim=2), loader, None,
+        epochs=2, device="cpu", checkpoint={},
+    )
+
+    assert history["epoch"] == [1, 2]
+    assert history["val_loss"] == []
+    assert len(history["train_loss"]) == 2
+
+
 def test_flat_recon_is_a_per_element_mean_not_a_sum():
     """2.1: `reduction="sum"` would report 8.0 here, one sum per squared element."""
     x = torch.ones(2, 4)

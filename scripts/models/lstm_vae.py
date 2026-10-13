@@ -87,22 +87,30 @@ def train_lstm_vae(
             vae, train_loader, optimizer, device, lstm_vae_loss, epoch_beta, grad_clip
         )
 
-        avg_val_loss, avg_val_recon, avg_val_kl = evaluate_lstm_vae(vae, val_loader, device, epoch_beta)
-
         history["epoch"].append(epoch)
         history["beta"].append(epoch_beta)
         history["lr"].append(optimizer.param_groups[0]["lr"])
         history["train_loss"].append(avg_train_loss)
         history["train_recon"].append(avg_train_recon)
         history["train_kl"].append(avg_train_kl)
-        history["val_loss"].append(avg_val_loss)
-        history["val_recon"].append(avg_val_recon)
-        history["val_kl"].append(avg_val_kl)
-        print(f"Epoch {epoch:3d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
 
-        stopper.update(avg_val_loss, epoch, vae)
+        # Guarded like the flat VAE (2.10): an unguarded `evaluate_lstm_vae` on a
+        # `None`/empty loader divided by `len(loader) == 0`. Falling back to the
+        # train loss keeps the loop runnable when there is no validation split.
+        if val_loader:
+            avg_val_loss, avg_val_recon, avg_val_kl = evaluate_lstm_vae(vae, val_loader, device, epoch_beta)
+            history["val_loss"].append(avg_val_loss)
+            history["val_recon"].append(avg_val_recon)
+            history["val_kl"].append(avg_val_kl)
+            print(f"Epoch {epoch:3d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
+            monitor = avg_val_loss
+        else:
+            print(f"Epoch {epoch:3d} | Train Loss: {avg_train_loss:.4f}")
+            monitor = avg_train_loss
+
+        stopper.update(monitor, epoch, vae)
         if scheduler is not None:
-            scheduler.step(avg_val_loss)
+            scheduler.step(monitor)
         if stopper.should_stop:
             print(f"Early stopping at epoch {epoch}; best was epoch {stopper.best_epoch} (2.8).")
             break

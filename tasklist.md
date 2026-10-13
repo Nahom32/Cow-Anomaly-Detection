@@ -324,8 +324,11 @@ Addresses problems #2, #3, and the loss-scale issue at `problems_observed.md:45-
       a full ordered pass covering each val window exactly once; the flat stage already did this. The
       train loaders keep their seeded `SubsetRandomSampler`. Guarded by
       `test_normalization.py::test_step_lstm_vae_validation_is_a_full_ordered_pass`.
-- [ ] **2.10** Guard the empty-val case in the LSTM-VAE. `vae.py:88` has `if val_loader:`;
+- [x] **2.10** Guard the empty-val case in the LSTM-VAE. `vae.py:88` has `if val_loader:`;
       `lstm_vae.py` does not.
+      **Done** — `train_lstm_vae` now mirrors the flat VAE: with no val loader it skips
+      `evaluate_lstm_vae` (which divided by `len(loader) == 0`) and monitors the train loss instead.
+      Guarded by `test_history.py::test_lstm_training_without_validation_does_not_divide_by_zero`.
 - [ ] **2.11** Report a **parameter-matched** baseline. Flat VAE is 111,424 params, LSTM-VAE is
       321,856 (2.9x). Any observed difference is currently confounded with capacity (problem #13).
 - [ ] **2.12** Derive `input_dim` from the feature array instead of hardcoding `256` in four places:
