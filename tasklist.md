@@ -317,9 +317,13 @@ Addresses problems #2, #3, and the loss-scale issue at `problems_observed.md:45-
       `::test_reduce_on_plateau_halves_lr_after_a_stall`,
       `::test_early_stopping_keeps_the_best_epoch_and_stops`,
       `::test_both_loops_log_the_learning_rate`, and `::test_unknown_scheduler_name_is_rejected`.
-- [ ] **2.9** Remove `SubsetRandomSampler` from the **validation** loaders
+- [x] **2.9** Remove `SubsetRandomSampler` from the **validation** loaders
       (`run_full_pipeline.py:226`, `train_lstm_vae_pipeline.py:75`) — validation is currently
       re-shuffled and stochastic every epoch.
+      **Done** — both LSTM val loaders are now `DataLoader(Subset(dataset, val_indices), shuffle=False)`,
+      a full ordered pass covering each val window exactly once; the flat stage already did this. The
+      train loaders keep their seeded `SubsetRandomSampler`. Guarded by
+      `test_normalization.py::test_step_lstm_vae_validation_is_a_full_ordered_pass`.
 - [ ] **2.10** Guard the empty-val case in the LSTM-VAE. `vae.py:88` has `if val_loader:`;
       `lstm_vae.py` does not.
 - [ ] **2.11** Report a **parameter-matched** baseline. Flat VAE is 111,424 params, LSTM-VAE is

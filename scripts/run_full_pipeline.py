@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 import yaml
-from torch.utils.data import DataLoader, SubsetRandomSampler, TensorDataset
+from torch.utils.data import DataLoader, Subset, SubsetRandomSampler, TensorDataset
 
 from scripts.config import CONFIG
 from scripts.data.build_features import build_feature_dataset
@@ -389,7 +389,10 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
     )
 
     train_loader = DataLoader(norm_dataset, batch_size=config["lstm_vae_batch_size"], sampler=SubsetRandomSampler(train_indices, generator=torch.Generator().manual_seed(config["random_seed"])))
-    val_loader = DataLoader(norm_dataset, batch_size=config["lstm_vae_batch_size"], sampler=SubsetRandomSampler(val_indices, generator=torch.Generator().manual_seed(config["random_seed"])))
+    # Validation is a full, ordered pass (2.9): a shuffled sampler made the val
+    # batches differ every epoch, so `val_loss` depended on the draw as well as the
+    # weights. `Subset` covers every val window exactly once, in split order.
+    val_loader = DataLoader(Subset(norm_dataset, val_indices), batch_size=config["lstm_vae_batch_size"], shuffle=False)
 
     vae = LSTMVAE(
         input_dim=256,

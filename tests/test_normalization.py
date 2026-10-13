@@ -604,6 +604,7 @@ def _fake_lstm_train(captured):
 
         captured["train"] = rows(train_loader)
         captured["val"] = rows(val_loader)
+        captured["val_loader"] = val_loader
         history = empty_history()
         for _ in range(epochs):
             for column in HISTORY_COLUMNS:
@@ -705,6 +706,25 @@ def test_step_lstm_vae_writes_best_and_final_checkpoints(tmp_path, lstm_annotati
     out = tmp_path / "out"
     assert (out / "lstm_vae_model.pth").is_file()
     assert (out / "lstm_vae_best.pth").is_file()
+
+
+def test_step_lstm_vae_validation_is_a_full_ordered_pass(tmp_path, lstm_annotations_csv, features):
+    """2.9: a `SubsetRandomSampler` val loader re-shuffled every epoch, so `val_loss`
+    carried a draw as well as the weights. It must now be a complete, ordered pass."""
+    from torch.utils.data import Subset
+
+    captured, _, _ = run_step_lstm_vae(tmp_path, features, lstm_annotations_csv)
+    loader = captured["val_loader"]
+
+    assert isinstance(loader.dataset, Subset), "val must be a Subset of the window dataset"
+    assert isinstance(loader.sampler, torch.utils.data.SequentialSampler)
+
+    def order():
+        return torch.cat([b if not isinstance(b, (list, tuple)) else b[0] for b in loader])
+
+    first, second = order(), order()
+    assert len(first) == len(loader.dataset), "every val window must be visited exactly once"
+    assert torch.equal(first, second), "a fixed pass must not re-shuffle between epochs"
 
 
 # ── The standalone entry point ────────────────────────────────────────────

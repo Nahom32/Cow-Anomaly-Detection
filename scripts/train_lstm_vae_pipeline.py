@@ -3,7 +3,7 @@ import os
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, SubsetRandomSampler
+from torch.utils.data import DataLoader, Subset, SubsetRandomSampler
 
 from scripts.config import CONFIG
 from scripts.data.feature_cache import open_run_feature_cache
@@ -106,9 +106,9 @@ def main():
     )
 
     train_generator = torch.Generator().manual_seed(SEED)
-    val_generator = torch.Generator().manual_seed(SEED)
     train_loader = DataLoader(norm_dataset, batch_size=BATCH_SIZE, sampler=SubsetRandomSampler(train_indices, generator=train_generator))
-    val_loader = DataLoader(norm_dataset, batch_size=BATCH_SIZE, sampler=SubsetRandomSampler(val_indices, generator=val_generator))
+    # Full, ordered validation pass (2.9); see step_lstm_vae.
+    val_loader = DataLoader(Subset(norm_dataset, val_indices), batch_size=BATCH_SIZE, shuffle=False)
 
     vae = LSTMVAE(input_dim=256, hidden_dim=128, latent_dim=32, num_layers=1)
 

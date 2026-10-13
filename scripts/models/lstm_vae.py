@@ -80,9 +80,9 @@ def train_lstm_vae(
 
     for epoch in range(1, epochs + 1):
         epoch_beta = beta_for_epoch(epoch, beta, kl_warmup_epochs)
-        # Averaged over the batches drawn, not `len(loader.dataset)` (2.2). Both
-        # loaders are built with `SubsetRandomSampler`, so `loader.dataset` is the
-        # *full* dataset rather than the sampled subset.
+        # Averaged over the batches drawn, not `len(loader.dataset)` (2.2). The
+        # train loader is built with `SubsetRandomSampler`, so `loader.dataset` is
+        # the *full* dataset rather than the sampled subset.
         avg_train_loss, avg_train_recon, avg_train_kl = run_training_epoch(
             vae, train_loader, optimizer, device, lstm_vae_loss, epoch_beta, grad_clip
         )
