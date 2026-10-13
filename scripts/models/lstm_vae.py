@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from scripts.models.training import beta_for_epoch
 from scripts.utils.history import empty_history
 
 
@@ -48,33 +49,36 @@ class LSTMVAE(nn.Module):
         return recon, mu, logvar
 
 
-def lstm_vae_loss(recon, x, mu, logvar):
-    """Reconstruction is a per-element MSE (2.1), not a sum.
+def lstm_vae_loss(recon, x, mu, logvar, beta=1.0):
+    """Reconstruction is a per-element MSE (2.1), KL a sum weighted by `beta` (2.5).
 
     Same fix as the flat VAE's `vae_loss`: `reduction="sum"` summed over
     `batch x seq_len x 256` elements, which made the LSTM-VAE's reported loss scale
     with sequence length and read ~16x larger than the flat VAE's purely
-    mechanically (`problems_observed.md:45-63`). KL is left as a sum; 2.5 rebalances it.
+    mechanically (`problems_observed.md:45-63`). KL stays a sum over the latent
+    dimensions; `beta` is the explicit, annealed weight on it (2.5), matching the
+    flat VAE so the two losses stay comparable.
     """
     recon_loss = F.mse_loss(recon, x, reduction="mean")
     kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-    total_loss = recon_loss + kl_loss
+    total_loss = recon_loss + beta * kl_loss
     return total_loss, recon_loss, kl_loss
 
 
-def train_lstm_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"):
+def train_lstm_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda", beta=1.0, kl_warmup_epochs=0):
     vae.to(device)
     optimizer = torch.optim.Adam(vae.parameters(), lr=lr)
     history = empty_history()
 
     for epoch in range(1, epochs + 1):
+        epoch_beta = beta_for_epoch(epoch, beta, kl_warmup_epochs)
         vae.train()
         train_loss, train_recon, train_kl = 0.0, 0.0, 0.0
         for batch in train_loader:
             x = batch.to(device) if not isinstance(batch, (list, tuple)) else batch[0].to(device)
             optimizer.zero_grad()
             recon, mu, logvar = vae(x)
-            loss, recon_loss, kl_loss = lstm_vae_loss(recon, x, mu, logvar)
+            loss, recon_loss, kl_loss = lstm_vae_loss(recon, x, mu, logvar, epoch_beta)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -95,7 +99,7 @@ def train_lstm_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"
             for batch in val_loader:
                 x = batch.to(device) if not isinstance(batch, (list, tuple)) else batch[0].to(device)
                 recon, mu, logvar = vae(x)
-                loss, recon_loss, kl_loss = lstm_vae_loss(recon, x, mu, logvar)
+                loss, recon_loss, kl_loss = lstm_vae_loss(recon, x, mu, logvar, epoch_beta)
                 val_loss += loss.item()
                 val_recon += recon_loss.item()
                 val_kl += kl_loss.item()
@@ -105,6 +109,7 @@ def train_lstm_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"
         avg_val_kl = val_kl / n_val_batches
 
         history["epoch"].append(epoch)
+        history["beta"].append(epoch_beta)
         history["train_loss"].append(avg_train_loss)
         history["train_recon"].append(avg_train_recon)
         history["train_kl"].append(avg_train_kl)

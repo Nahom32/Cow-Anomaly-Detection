@@ -78,12 +78,53 @@ def test_both_models_log_recon_and_kl_as_separate_series(flat_history, lstm_hist
 def test_loss_equals_recon_plus_kl(lstm_history, flat_history):
     for history in (lstm_history, flat_history):
         for split in ["train", "val"]:
-            for total, recon, kl in zip(
+            for total, beta, recon, kl in zip(
                 history[f"{split}_loss"],
+                history["beta"],
                 history[f"{split}_recon"],
                 history[f"{split}_kl"],
             ):
-                assert total == pytest.approx(recon + kl, rel=1e-5)
+                assert total == pytest.approx(recon + beta * kl, rel=1e-5)
+
+
+def test_both_losses_weight_kl_by_beta():
+    """2.5: total = recon + beta*KL. A dropped `beta` shows up as a 3x error here."""
+    x = torch.zeros(1, 4)
+    recon = torch.ones(1, 4)
+    mu = torch.ones(1, 2)
+    logvar = torch.zeros(1, 2)
+
+    total, recon_loss, kl_loss = vae_loss(recon, x, mu, logvar, beta=3.0)
+    assert kl_loss.item() > 0.0
+    assert total.item() == pytest.approx(recon_loss.item() + 3.0 * kl_loss.item())
+
+    total_l, _, kl_l = lstm_vae_loss(recon.unsqueeze(1), x.unsqueeze(1), mu, logvar, beta=3.0)
+    assert total_l.item() == pytest.approx(recon_loss.item() + 3.0 * kl_l.item())
+
+
+def test_beta_warmup_ramps_to_beta_then_holds():
+    from scripts.models.training import beta_for_epoch
+
+    assert beta_for_epoch(1, 1.0, 0) == 1.0
+    assert beta_for_epoch(3, 1.0, 0) == 1.0
+    assert beta_for_epoch(1, 0.5, 4) == pytest.approx(0.125)
+    assert beta_for_epoch(4, 0.5, 4) == pytest.approx(0.5)
+    assert beta_for_epoch(10, 0.5, 4) == pytest.approx(0.5)
+
+
+def test_both_loops_log_the_annealed_beta():
+    flat_x = torch.randn(8, 4, generator=torch.Generator().manual_seed(0))
+    flat = train_vae(
+        VAE(4, hidden_dim=8, latent_dim=2), DataLoader(flat_x, batch_size=4),
+        DataLoader(flat_x, batch_size=4), epochs=3, device="cpu", beta=0.5, kl_warmup_epochs=2,
+    )
+    seq_x = torch.randn(8, 3, 4, generator=torch.Generator().manual_seed(0))
+    lstm = train_lstm_vae(
+        LSTMVAE(input_dim=4, hidden_dim=8, latent_dim=2), DataLoader(seq_x, batch_size=4),
+        DataLoader(seq_x, batch_size=4), epochs=3, device="cpu", beta=0.5, kl_warmup_epochs=2,
+    )
+    for history in (flat, lstm):
+        assert history["beta"] == pytest.approx([0.25, 0.5, 0.5])
 
 
 def test_flat_recon_is_a_per_element_mean_not_a_sum():

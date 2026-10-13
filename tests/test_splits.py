@@ -336,9 +336,11 @@ def _pipeline_config(**overrides):
         "random_seed": SEED,
         "vae_epochs": 1, "vae_batch_size": 8, "vae_lr": 1e-3,
         "vae_hidden_dim": 8, "vae_latent_dim": 2,
+        "vae_beta": 1.0, "vae_kl_warmup_epochs": 0,
         "seq_len": SEQ_LEN, "seq_stride": SEQ_STRIDE,
         "lstm_vae_epochs": 1, "lstm_vae_batch_size": 4, "lstm_vae_lr": 1e-3,
         "lstm_vae_hidden_dim": 8, "lstm_vae_latent_dim": 2, "lstm_vae_num_layers": 1,
+        "lstm_vae_beta": 1.0, "lstm_vae_kl_warmup_epochs": 0,
     }
     config.update(overrides)
     return config
@@ -387,7 +389,7 @@ def run_two_stages(tmp_path, **config_overrides):
     )
 
     def record(module, name, captured):
-        def fake_train(model, train_loader, val_loader, epochs, lr, device):
+        def fake_train(model, train_loader, val_loader, epochs, lr, device, **kwargs):
             def rows(loader):
                 # TensorDataset yields `(tensor,)` batches, the sequence dataset
                 # bare tensors; indexing a bare tensor would keep only its first

@@ -67,6 +67,11 @@ CONFIG = {
     "vae_lr": 1e-3,
     "vae_hidden_dim": 128,
     "vae_latent_dim": 32,
+    # KL weight and its linear warm-up (2.5). KL is a latent-dim sum while recon is
+    # a per-element mean, so the effective weight is not 1 by default; `beta` makes
+    # it explicit and `kl_warmup_epochs` ramps it in to avoid posterior collapse.
+    "vae_beta": 1.0,
+    "vae_kl_warmup_epochs": 0,
 
     # LSTM-VAE
     "lstm_vae_epochs": 50,
@@ -75,6 +80,8 @@ CONFIG = {
     "lstm_vae_hidden_dim": 128,
     "lstm_vae_latent_dim": 32,
     "lstm_vae_num_layers": 1,
+    "lstm_vae_beta": 1.0,
+    "lstm_vae_kl_warmup_epochs": 0,
     "seq_len": 16,
     "seq_stride": 8,
 }

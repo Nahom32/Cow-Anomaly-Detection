@@ -111,7 +111,10 @@ def main():
     vae = LSTMVAE(input_dim=256, hidden_dim=128, latent_dim=32, num_layers=1)
 
     print("Starting LSTM-VAE training...")
-    history = train_lstm_vae(vae, train_loader, val_loader, epochs=EPOCHS, lr=LR, device=DEVICE)
+    history = train_lstm_vae(
+        vae, train_loader, val_loader, epochs=EPOCHS, lr=LR, device=DEVICE,
+        beta=CONFIG["lstm_vae_beta"], kl_warmup_epochs=CONFIG["lstm_vae_kl_warmup_epochs"],
+    )
 
     torch.save(vae.state_dict(), os.path.join(OUTPUT_DIR, "lstm_vae_anomaly.pth"))
     save_history(history, os.path.join(OUTPUT_DIR, "lstm_vae_training_history.csv"))

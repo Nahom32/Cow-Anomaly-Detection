@@ -11,6 +11,9 @@ from scripts.utils.io import atomic_write_text
 
 HISTORY_COLUMNS = [
     "epoch",
+    # The effective KL weight for the epoch (2.5): with KL annealing this is not
+    # `CONFIG["vae_beta"]`, and a loss curve is unreadable without it.
+    "beta",
     "train_loss",
     "train_recon",
     "train_kl",

@@ -233,7 +233,11 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     )
 
     vae = VAE(features.shape[1], hidden_dim=config["vae_hidden_dim"], latent_dim=config["vae_latent_dim"])
-    history = train_vae(vae, train_loader, val_loader, epochs=config["vae_epochs"], lr=config["vae_lr"], device=device)
+    history = train_vae(
+        vae, train_loader, val_loader,
+        epochs=config["vae_epochs"], lr=config["vae_lr"], device=device,
+        beta=config["vae_beta"], kl_warmup_epochs=config["vae_kl_warmup_epochs"],
+    )
 
     save_history(history, os.path.join(output_dir, "flat_vae_history.csv"))
     torch.save(vae.state_dict(), os.path.join(output_dir, "flat_vae_model.pth"))
@@ -367,6 +371,7 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
     history = train_lstm_vae(
         vae, train_loader, val_loader,
         epochs=config["lstm_vae_epochs"], lr=config["lstm_vae_lr"], device=device,
+        beta=config["lstm_vae_beta"], kl_warmup_epochs=config["lstm_vae_kl_warmup_epochs"],
     )
 
     torch.save(vae.state_dict(), os.path.join(output_dir, "lstm_vae_model.pth"))

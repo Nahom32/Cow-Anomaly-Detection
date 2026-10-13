@@ -266,9 +266,18 @@ Addresses problems #2, #3, and the loss-scale issue at `problems_observed.md:45-
       Guarded by `tests/test_normalization.py::test_step_lstm_vae_minmax_maps_train_into_unit_range`
       and `::test_step_lstm_vae_held_out_windows_stay_out_of_range`, with the held-out-invariance
       test retargeted from mean/std to min/max.
-- [ ] **2.5** Add an explicit `beta` and KL annealing. The KL term is summed over 32 latent dims
+- [x] **2.5** Add an explicit `beta` and KL annealing. The KL term is summed over 32 latent dims
       while the recon term sums over 256 elements (`vae.py:48-49`), so the effective KL weight is
       inflated relative to a per-element MSE. `beta` is hardcoded to 1.0 with no warm-up.
+      **Done** — `vae_loss`/`lstm_vae_loss` now compute `recon + beta * kl`, and both train loops
+      take `beta` and `kl_warmup_epochs`, deriving the per-epoch weight from
+      `scripts/models/training.py::beta_for_epoch` (linear ramp 0 -> `beta`, disabled when
+      `warmup_epochs <= 0`). The effective weight is logged as a `beta` column in the shared
+      history so an annealed curve is readable. Both models read `vae_beta`/
+      `vae_kl_warmup_epochs` (and the `lstm_vae_` twins) from `CONFIG`. Guarded by
+      `tests/test_history.py::test_both_losses_weight_kl_by_beta`,
+      `::test_beta_warmup_ramps_to_beta_then_holds` and `::test_both_loops_log_the_annealed_beta`,
+      with `::test_loss_equals_recon_plus_kl` retargeted to `recon + beta*kl`.
 - [ ] **2.6** Make evaluation deterministic. `reparameterize` samples unconditionally
       (`vae.py:32-35`, `lstm_vae.py:28-31`), so `val_loss` carries Monte-Carlo noise — visible as a
       **3.07-unit oscillation** across the last 10 epochs of the real `flat_vae_history.csv`.

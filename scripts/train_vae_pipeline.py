@@ -92,7 +92,10 @@ def main():
     vae = VAE(input_dim, hidden_dim=128, latent_dim=32)
 
     print("Starting VAE training...")
-    history = train_vae(vae, train_loader, val_loader, epochs=EPOCHS, lr=LR, device=DEVICE)
+    history = train_vae(
+        vae, train_loader, val_loader, epochs=EPOCHS, lr=LR, device=DEVICE,
+        beta=CONFIG["vae_beta"], kl_warmup_epochs=CONFIG["vae_kl_warmup_epochs"],
+    )
 
     save_history(history, os.path.join(OUTPUT_DIR, "vae_training_history.csv"))
     torch.save(vae.state_dict(), os.path.join(OUTPUT_DIR, "vae_anomaly_model.pth"))

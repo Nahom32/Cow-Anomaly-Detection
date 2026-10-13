@@ -303,6 +303,8 @@ def config(**overrides):
         "vae_lr": 1e-3,
         "vae_hidden_dim": 8,
         "vae_latent_dim": 2,
+        "vae_beta": 1.0,
+        "vae_kl_warmup_epochs": 0,
         # `step_lstm_vae` reads these; small enough to run in milliseconds.
         "seq_len": 4,
         "seq_stride": 2,
@@ -312,6 +314,8 @@ def config(**overrides):
         "lstm_vae_hidden_dim": 8,
         "lstm_vae_latent_dim": 2,
         "lstm_vae_num_layers": 1,
+        "lstm_vae_beta": 1.0,
+        "lstm_vae_kl_warmup_epochs": 0,
     }
     base.update(overrides)
     return base
@@ -336,7 +340,7 @@ def grouped_split(features, video_ids, output_dir, val_split=VAL_SPLIT, test_spl
 
 def _fake_train_loop(captured):
     """A `train_vae` that records exactly what the loop would have trained on."""
-    def fake_train_vae(vae, train_loader, val_loader, epochs, lr, device):
+    def fake_train_vae(vae, train_loader, val_loader, epochs, lr, device, **kwargs):
         captured["train"] = torch.cat([batch[0] for batch in train_loader])
         captured["val"] = torch.cat([batch[0] for batch in val_loader])
         history = empty_history()
@@ -564,7 +568,7 @@ def lstm_annotations_csv(tmp_path):
 
 
 def _fake_lstm_train(captured):
-    def fake_train_lstm_vae(vae, train_loader, val_loader, epochs, lr, device):
+    def fake_train_lstm_vae(vae, train_loader, val_loader, epochs, lr, device, **kwargs):
         def rows(loader):
             # TensorDataset yields `(tensor,)` batches, the sequence dataset
             # bare tensors; indexing a bare tensor would keep only its first row.
