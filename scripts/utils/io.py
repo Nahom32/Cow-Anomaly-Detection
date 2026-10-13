@@ -77,3 +77,11 @@ def atomic_save_npy(path, array):
     with atomic_path(path) as tmp:
         with open(tmp, "wb") as f:
             np.save(f, array)
+
+
+def atomic_torch_save(path, obj):
+    """Atomic `torch.save`. A crash mid-write must not leave a loadable-looking file."""
+    import torch
+
+    with atomic_path(path) as tmp:
+        torch.save(obj, tmp)

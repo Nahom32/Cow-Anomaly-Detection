@@ -31,7 +31,7 @@ from scripts.models.train_yolo_n import train_yolo26n
 from scripts.models.vae import VAE, plot_history, train_vae
 from scripts.utils.hashing import hash_json, sha256_file
 from scripts.utils.history import save_history
-from scripts.utils.io import atomic_write_json
+from scripts.utils.io import atomic_torch_save, atomic_write_json
 from scripts.utils.plotting import setup_matplotlib
 from scripts.utils.seeding import set_seed
 
@@ -56,6 +56,19 @@ def get_device():
     if torch.cuda.is_available():
         return "cuda"
     return "cpu"
+
+
+def _save_best_checkpoint(checkpoint, path, label):
+    """Write the best-val checkpoint a trainer reported, and say which epoch it was (2.7)."""
+    best_state = (checkpoint or {}).get("best_state")
+    if best_state is None:
+        return False
+    atomic_torch_save(path, best_state)
+    print(
+        f"  {label}: best val epoch {checkpoint.get('best_epoch')} "
+        f"({checkpoint.get('best_metric'):.4f}); final epoch {checkpoint.get('final_epoch')}"
+    )
+    return True
 
 
 def load_state(output_dir):
@@ -233,14 +246,20 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     )
 
     vae = VAE(features.shape[1], hidden_dim=config["vae_hidden_dim"], latent_dim=config["vae_latent_dim"])
+    checkpoint = {}
     history = train_vae(
         vae, train_loader, val_loader,
         epochs=config["vae_epochs"], lr=config["vae_lr"], device=device,
         beta=config["vae_beta"], kl_warmup_epochs=config["vae_kl_warmup_epochs"],
+        checkpoint=checkpoint,
     )
 
     save_history(history, os.path.join(output_dir, "flat_vae_history.csv"))
-    torch.save(vae.state_dict(), os.path.join(output_dir, "flat_vae_model.pth"))
+    # Both checkpoints are written and which one the scores below come from is
+    # recorded. `flat_vae_model.pth` stays the final-epoch weights so existing
+    # artifacts keep their meaning; `flat_vae_best.pth` is the best-val epoch (2.7).
+    atomic_torch_save(os.path.join(output_dir, "flat_vae_model.pth"), vae.state_dict())
+    _save_best_checkpoint(checkpoint, os.path.join(output_dir, "flat_vae_best.pth"), "flat VAE")
     np.save(os.path.join(output_dir, "flat_vae_feature_min.npy"), normalizer.min_)
     np.save(os.path.join(output_dir, "flat_vae_feature_max.npy"), normalizer.max_)
 
@@ -286,6 +305,11 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
             n_val=int(X_val.shape[0]),
             n_test=int(test_idx.shape[0]),
             normalizer_fit_on="train",
+            # 2.7: which epoch each checkpoint is, and which one the split scores use.
+            best_epoch=checkpoint.get("best_epoch"),
+            best_metric=checkpoint.get("best_metric"),
+            final_epoch=checkpoint.get("final_epoch"),
+            scored_checkpoint="final",
             weights_sha256=(manifest.data.get("artifacts", {}).get("yolo_weights", {}) or {}).get("sha256"),
         )
     print("Flat VAE complete.")
@@ -367,14 +391,19 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
         latent_dim=config["lstm_vae_latent_dim"],
         num_layers=config["lstm_vae_num_layers"],
     )
+    checkpoint = {}
 
     history = train_lstm_vae(
         vae, train_loader, val_loader,
         epochs=config["lstm_vae_epochs"], lr=config["lstm_vae_lr"], device=device,
         beta=config["lstm_vae_beta"], kl_warmup_epochs=config["lstm_vae_kl_warmup_epochs"],
+        checkpoint=checkpoint,
     )
 
-    torch.save(vae.state_dict(), os.path.join(output_dir, "lstm_vae_model.pth"))
+    # Final-epoch weights keep the existing artifact's meaning; the best-val epoch
+    # is written alongside and named in the manifest (2.7).
+    atomic_torch_save(os.path.join(output_dir, "lstm_vae_model.pth"), vae.state_dict())
+    _save_best_checkpoint(checkpoint, os.path.join(output_dir, "lstm_vae_best.pth"), "LSTM-VAE")
     save_history(history, os.path.join(output_dir, "lstm_vae_history.csv"))
     np.save(os.path.join(output_dir, "lstm_vae_feature_min.npy"), normalizer.min_)
     np.save(os.path.join(output_dir, "lstm_vae_feature_max.npy"), normalizer.max_)
@@ -419,6 +448,11 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
             n_test=len(test_indices),
             n_videos=len(set(sequence_groups)),
             normalizer_fit_on="train",
+            # 2.7: checkpoint identity and which one the split scores use.
+            best_epoch=checkpoint.get("best_epoch"),
+            best_metric=checkpoint.get("best_metric"),
+            final_epoch=checkpoint.get("final_epoch"),
+            scored_checkpoint="final",
             weights_sha256=(manifest.data.get("artifacts", {}).get("yolo_weights", {}) or {}).get("sha256"),
         )
     print("LSTM-VAE complete.")

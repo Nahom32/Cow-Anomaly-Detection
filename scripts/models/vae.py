@@ -65,11 +65,18 @@ def vae_loss(recon_x, x, mu, logvar, beta=1.0):
     return total_loss, recon_loss, kl_loss
 
 
-def train_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda", beta=1.0, kl_warmup_epochs=0):
+def train_vae(
+    vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda",
+    beta=1.0, kl_warmup_epochs=0, checkpoint=None,
+):
     vae.to(device)
     optimizer = torch.optim.Adam(vae.parameters(), lr=lr)
 
     history = empty_history()
+    # The saved model used to be whatever the last epoch happened to produce, so a
+    # run whose best val was epoch 48 reported the epoch-50 weights (2.7). Track the
+    # best weights too; the caller decides which checkpoint is compared.
+    best_metric = best_epoch = best_state = None
 
     for epoch in range(1, epochs + 1):
         epoch_beta = beta_for_epoch(epoch, beta, kl_warmup_epochs)
@@ -99,8 +106,20 @@ def train_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda", bet
             history["val_recon"].append(val_recon)
             history["val_kl"].append(val_kl)
             print(f"Epoch {epoch:3d} | Train Loss: {history['train_loss'][-1]:.4f} | Val Loss: {history['val_loss'][-1]:.4f}")
+            monitor = val_loss
         else:
             print(f"Epoch {epoch:3d} | Train Loss: {history['train_loss'][-1]:.4f}")
+            monitor = history["train_loss"][-1]
+
+        if best_metric is None or monitor < best_metric:
+            best_metric, best_epoch = monitor, epoch
+            best_state = {k: v.detach().cpu().clone() for k, v in vae.state_dict().items()}
+
+    if checkpoint is not None:
+        checkpoint["best_state"] = best_state
+        checkpoint["best_epoch"] = best_epoch
+        checkpoint["best_metric"] = best_metric
+        checkpoint["final_epoch"] = history["epoch"][-1]
 
     return history
 

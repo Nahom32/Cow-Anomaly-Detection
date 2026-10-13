@@ -15,6 +15,7 @@ from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.vae import VAE, plot_history, train_vae
 from scripts.utils.hashing import hash_json
 from scripts.utils.history import save_history
+from scripts.utils.io import atomic_torch_save
 from scripts.utils.seeding import set_seed
 
 
@@ -92,13 +93,19 @@ def main():
     vae = VAE(input_dim, hidden_dim=128, latent_dim=32)
 
     print("Starting VAE training...")
+    checkpoint = {}
     history = train_vae(
         vae, train_loader, val_loader, epochs=EPOCHS, lr=LR, device=DEVICE,
         beta=CONFIG["vae_beta"], kl_warmup_epochs=CONFIG["vae_kl_warmup_epochs"],
+        checkpoint=checkpoint,
     )
 
     save_history(history, os.path.join(OUTPUT_DIR, "vae_training_history.csv"))
-    torch.save(vae.state_dict(), os.path.join(OUTPUT_DIR, "vae_anomaly_model.pth"))
+    atomic_torch_save(os.path.join(OUTPUT_DIR, "vae_anomaly_model.pth"), vae.state_dict())
+    if checkpoint.get("best_state") is not None:
+        atomic_torch_save(os.path.join(OUTPUT_DIR, "vae_anomaly_best.pth"), checkpoint["best_state"])
+        print(f"Best val epoch {checkpoint['best_epoch']} ({checkpoint['best_metric']:.4f}); "
+              f"final epoch {checkpoint['final_epoch']}. Scores use the final checkpoint (2.7).")
     np.save(os.path.join(OUTPUT_DIR, "feature_min.npy"), normalizer.min_)
     np.save(os.path.join(OUTPUT_DIR, "feature_max.npy"), normalizer.max_)
 

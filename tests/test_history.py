@@ -160,6 +160,33 @@ def test_lstm_evaluation_is_deterministic_across_rng_states():
     assert all(math.isfinite(v) for v in first)
 
 
+def test_flat_training_reports_best_and_final_epochs():
+    """2.7: the saved model used to be the last epoch even when val was best earlier."""
+    train_loader, val_loader = flat_loaders()
+    checkpoint = {}
+    history = train_vae(
+        VAE(16), train_loader, val_loader, epochs=3, device="cpu", checkpoint=checkpoint
+    )
+    best = min(history["val_loss"])
+    assert checkpoint["best_metric"] == pytest.approx(best)
+    assert checkpoint["best_epoch"] == history["val_loss"].index(best) + 1
+    assert checkpoint["final_epoch"] == 3
+    assert set(checkpoint["best_state"]) == set(VAE(16).state_dict())
+
+
+def test_lstm_training_reports_best_and_final_epochs():
+    train_loader, val_loader = seq_loaders()
+    checkpoint = {}
+    history = train_lstm_vae(
+        LSTMVAE(input_dim=16), train_loader, val_loader, epochs=3, device="cpu", checkpoint=checkpoint
+    )
+    best = min(history["val_loss"])
+    assert checkpoint["best_metric"] == pytest.approx(best)
+    assert checkpoint["best_epoch"] == history["val_loss"].index(best) + 1
+    assert checkpoint["final_epoch"] == 3
+    assert set(checkpoint["best_state"]) == set(LSTMVAE(input_dim=16).state_dict())
+
+
 def test_flat_recon_is_a_per_element_mean_not_a_sum():
     """2.1: `reduction="sum"` would report 8.0 here, one sum per squared element."""
     x = torch.ones(2, 4)

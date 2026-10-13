@@ -347,6 +347,12 @@ def _fake_train_loop(captured):
         for _ in range(epochs):
             for column in HISTORY_COLUMNS:
                 history[column].append(0.0)
+        checkpoint = kwargs.get("checkpoint")
+        if checkpoint is not None:
+            checkpoint["best_state"] = {k: v.clone() for k, v in vae.state_dict().items()}
+            checkpoint["best_epoch"] = 1
+            checkpoint["best_metric"] = 0.0
+            checkpoint["final_epoch"] = epochs
         return history
 
     return fake_train_vae
@@ -489,6 +495,14 @@ def test_step_flat_vae_keeps_one_video_entirely_on_one_side(tmp_path, annotation
     )
 
 
+def test_step_flat_vae_writes_best_and_final_checkpoints(tmp_path, annotations_csv, features):
+    """2.7: both the final-epoch and best-val checkpoints reach disk."""
+    run_step_flat_vae(tmp_path, features, annotations_csv)
+    out = tmp_path / "out"
+    assert (out / "flat_vae_model.pth").is_file()
+    assert (out / "flat_vae_best.pth").is_file()
+
+
 # ── The test split (1.5) ──────────────────────────────────────────────────
 #
 # With `test_split > 0` a third, never-trained-on partition exists. The fit must
@@ -582,6 +596,12 @@ def _fake_lstm_train(captured):
         for _ in range(epochs):
             for column in HISTORY_COLUMNS:
                 history[column].append(0.0)
+        checkpoint = kwargs.get("checkpoint")
+        if checkpoint is not None:
+            checkpoint["best_state"] = {k: v.clone() for k, v in vae.state_dict().items()}
+            checkpoint["best_epoch"] = 1
+            checkpoint["best_metric"] = 0.0
+            checkpoint["final_epoch"] = epochs
         return history
 
     return fake_train_lstm_vae
@@ -665,6 +685,14 @@ def test_step_lstm_vae_held_out_windows_stay_out_of_range(
     )
 
     assert captured["val"].max() > 1.0, "an out-of-range val window must not be rescaled into [0, 1]"
+
+
+def test_step_lstm_vae_writes_best_and_final_checkpoints(tmp_path, lstm_annotations_csv, features):
+    """2.7 on the window path: both checkpoints reach disk."""
+    run_step_lstm_vae(tmp_path, features, lstm_annotations_csv)
+    out = tmp_path / "out"
+    assert (out / "lstm_vae_model.pth").is_file()
+    assert (out / "lstm_vae_best.pth").is_file()
 
 
 # ── The standalone entry point ────────────────────────────────────────────

@@ -289,9 +289,20 @@ Addresses problems #2, #3, and the loss-scale issue at `problems_observed.md:45-
       sampled `z`. Guarded by `tests/test_history.py::test_flat_evaluation_is_deterministic_across_rng_states`
       and `::test_lstm_evaluation_is_deterministic_across_rng_states`, which re-run the pass under
       different global RNG seeds and require identical losses.
-- [ ] **2.7** Report **best** and **final** checkpoints and declare which one is compared (schema in
+- [x] **2.7** Report **best** and **final** checkpoints and declare which one is compared (schema in
       Phase 3). The saved model is the epoch-50 checkpoint (`vae.py:107`); best val was epoch 48
       (197.90 vs 200.98 final).
+      **Done** — both train loops now clone the best-val weights and return `best_state`,
+      `best_epoch`, `best_metric`, `final_epoch` through an out-param. Each stage writes both
+      `<model>_model.pth` (final, unchanged meaning) and `<model>_best.pth`, and records
+      `best_epoch`/`best_metric`/`final_epoch` plus `scored_checkpoint="final"` in the manifest, so
+      the compared checkpoint is declared rather than implicit. Writes go through the new atomic
+      `atomic_torch_save`. The standalone entry points do the same. Phase 3's schema will promote
+      this to a first-class field and can then switch `scored_checkpoint` to `best`. Guarded by
+      `test_history.py::test_flat_training_reports_best_and_final_epochs` /
+      `::test_lstm_training_reports_best_and_final_epochs` and the stage tests
+      `test_normalization.py::test_step_flat_vae_writes_best_and_final_checkpoints` /
+      `::test_step_lstm_vae_writes_best_and_final_checkpoints`.
 - [ ] **2.8** Add LR scheduler, early stopping, and gradient clipping to both loops.
 - [ ] **2.9** Remove `SubsetRandomSampler` from the **validation** loaders
       (`run_full_pipeline.py:226`, `train_lstm_vae_pipeline.py:75`) — validation is currently
