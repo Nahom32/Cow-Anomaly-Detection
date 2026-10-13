@@ -245,8 +245,15 @@ Addresses problems #2, #3, and the loss-scale issue at `problems_observed.md:45-
       `tests/test_history.py::test_lstm_epoch_average_divides_by_batches_not_dataset_size`, which
       trains on the same sampled windows behind datasets of different length and requires the same
       average.
-- [ ] **2.3** Log recon and KL as **separate** series for both models (flat VAE already does;
+- [x] **2.3** Log recon and KL as **separate** series for both models (flat VAE already does;
       LSTM-VAE discards them).
+      **Done** — delivered with Phase 0.4: `train_lstm_vae` no longer does `loss, _, _ = ...`
+      and writes `train_recon`/`train_kl`/`val_recon`/`val_kl` through the shared
+      `scripts/utils/history.py` schema, so both models emit the same seven columns. This item
+      adds the explicit cross-model guard that was missing:
+      `tests/test_history.py::test_both_models_log_recon_and_kl_as_separate_series` asserts both
+      models expose finite, distinct recon and KL series per split, and that each epoch's total is
+      their sum.
 - [ ] **2.4** Make output ranges consistent. The flat VAE ends in `nn.Sigmoid()` (`vae.py:25`);
       the LSTM-VAE's `fc_out` does not (`lstm_vae.py:19`). Their reconstruction errors are therefore
       not on the same scale and cannot be compared.

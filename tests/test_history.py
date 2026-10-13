@@ -1,3 +1,5 @@
+import math
+
 import pandas as pd
 import pytest
 import torch
@@ -54,6 +56,23 @@ def test_lstm_history_keeps_the_recon_kl_split(lstm_history):
             values = lstm_history[f"{split}_{component}"]
             assert len(values) == EPOCHS
             assert all(isinstance(v, float) for v in values)
+
+
+def test_both_models_log_recon_and_kl_as_separate_series(flat_history, lstm_history):
+    """2.3: both models must expose train/val recon and KL as their own finite
+    series, not the total replayed three times. The flat VAE always did; the
+    LSTM-VAE dropped them until Phase 0.4."""
+    for history in (flat_history, lstm_history):
+        for split in ("train", "val"):
+            loss = history[f"{split}_loss"]
+            recon = history[f"{split}_recon"]
+            kl = history[f"{split}_kl"]
+            assert len(recon) == len(kl) == EPOCHS
+            assert all(math.isfinite(v) for v in recon + kl)
+            # Distinct series: a regression to `loss, _, _` would leave these equal
+            # or, more likely, absent.
+            assert any(r != k for r, k in zip(recon, kl))
+            assert all(t == pytest.approx(r + k) for t, r, k in zip(loss, recon, kl))
 
 
 def test_loss_equals_recon_plus_kl(lstm_history, flat_history):
