@@ -303,7 +303,20 @@ Addresses problems #2, #3, and the loss-scale issue at `problems_observed.md:45-
       `::test_lstm_training_reports_best_and_final_epochs` and the stage tests
       `test_normalization.py::test_step_flat_vae_writes_best_and_final_checkpoints` /
       `::test_step_lstm_vae_writes_best_and_final_checkpoints`.
-- [ ] **2.8** Add LR scheduler, early stopping, and gradient clipping to both loops.
+- [x] **2.8** Add LR scheduler, early stopping, and gradient clipping to both loops.
+      **Done** — shared `scripts/models/training.py` now owns the mechanics: `run_training_epoch`
+      (same clip-then-step order for both models), `make_scheduler` (ReduceLROnPlateau), and an
+      `EarlyStopping` tracker that also holds the best weights (merging with 2.7's inline tracker).
+      Both loops take `lr_scheduler`/`lr_scheduler_factor`/`lr_scheduler_patience`, `grad_clip`,
+      and an `early_stopping` object; each logs the actual LR as a new `lr` history column, steps the
+      scheduler on the val loss, and breaks on stall — so the previously-unexplained LR drops at
+      epochs 15/25/30 and training past the best epoch (48) are now both recorded and bounded. All
+      values come from the new `*_lr_scheduler*`, `*_grad_clip`, `*_early_stopping_patience` CONFIG
+      keys. Guarded by `test_history.py::test_grad_clip_is_applied_when_configured`,
+      `::test_both_models_stop_early_when_validation_stalls`,
+      `::test_reduce_on_plateau_halves_lr_after_a_stall`,
+      `::test_early_stopping_keeps_the_best_epoch_and_stops`,
+      `::test_both_loops_log_the_learning_rate`, and `::test_unknown_scheduler_name_is_rejected`.
 - [ ] **2.9** Remove `SubsetRandomSampler` from the **validation** loaders
       (`run_full_pipeline.py:226`, `train_lstm_vae_pipeline.py:75`) — validation is currently
       re-shuffled and stochastic every epoch.

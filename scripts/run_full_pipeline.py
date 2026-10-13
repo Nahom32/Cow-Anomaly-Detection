@@ -28,6 +28,7 @@ from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
 from scripts.models.train_yolo_n import train_yolo26n
+from scripts.models.training import EarlyStopping
 from scripts.models.vae import VAE, plot_history, train_vae
 from scripts.utils.hashing import hash_json, sha256_file
 from scripts.utils.history import save_history
@@ -252,6 +253,11 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
         epochs=config["vae_epochs"], lr=config["vae_lr"], device=device,
         beta=config["vae_beta"], kl_warmup_epochs=config["vae_kl_warmup_epochs"],
         checkpoint=checkpoint,
+        lr_scheduler=config["vae_lr_scheduler"],
+        lr_scheduler_factor=config["vae_lr_scheduler_factor"],
+        lr_scheduler_patience=config["vae_lr_scheduler_patience"],
+        grad_clip=config["vae_grad_clip"],
+        early_stopping=EarlyStopping(patience=config["vae_early_stopping_patience"]),
     )
 
     save_history(history, os.path.join(output_dir, "flat_vae_history.csv"))
@@ -398,6 +404,11 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
         epochs=config["lstm_vae_epochs"], lr=config["lstm_vae_lr"], device=device,
         beta=config["lstm_vae_beta"], kl_warmup_epochs=config["lstm_vae_kl_warmup_epochs"],
         checkpoint=checkpoint,
+        lr_scheduler=config["lstm_vae_lr_scheduler"],
+        lr_scheduler_factor=config["lstm_vae_lr_scheduler_factor"],
+        lr_scheduler_patience=config["lstm_vae_lr_scheduler_patience"],
+        grad_clip=config["lstm_vae_grad_clip"],
+        early_stopping=EarlyStopping(patience=config["lstm_vae_early_stopping_patience"]),
     )
 
     # Final-epoch weights keep the existing artifact's meaning; the best-val epoch

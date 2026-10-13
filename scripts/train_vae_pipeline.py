@@ -12,6 +12,7 @@ from scripts.data.normalize import MinMaxNormalizer
 from scripts.data.splits import describe, resolve_indices, resolve_split, split_params
 from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
+from scripts.models.training import EarlyStopping
 from scripts.models.vae import VAE, plot_history, train_vae
 from scripts.utils.hashing import hash_json
 from scripts.utils.history import save_history
@@ -98,6 +99,11 @@ def main():
         vae, train_loader, val_loader, epochs=EPOCHS, lr=LR, device=DEVICE,
         beta=CONFIG["vae_beta"], kl_warmup_epochs=CONFIG["vae_kl_warmup_epochs"],
         checkpoint=checkpoint,
+        lr_scheduler=CONFIG["vae_lr_scheduler"],
+        lr_scheduler_factor=CONFIG["vae_lr_scheduler_factor"],
+        lr_scheduler_patience=CONFIG["vae_lr_scheduler_patience"],
+        grad_clip=CONFIG["vae_grad_clip"],
+        early_stopping=EarlyStopping(patience=CONFIG["vae_early_stopping_patience"]),
     )
 
     save_history(history, os.path.join(OUTPUT_DIR, "vae_training_history.csv"))

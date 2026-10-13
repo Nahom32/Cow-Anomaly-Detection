@@ -14,6 +14,10 @@ HISTORY_COLUMNS = [
     # The effective KL weight for the epoch (2.5): with KL annealing this is not
     # `CONFIG["vae_beta"]`, and a loss curve is unreadable without it.
     "beta",
+    # The learning rate actually used this epoch (2.8). A ReduceLROnPlateau run
+    # that is logged without its LR cannot be told from one where the schedule
+    # silently never fired.
+    "lr",
     "train_loss",
     "train_recon",
     "train_kl",

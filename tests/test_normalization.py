@@ -305,6 +305,13 @@ def config(**overrides):
         "vae_latent_dim": 2,
         "vae_beta": 1.0,
         "vae_kl_warmup_epochs": 0,
+        # Optimisation stabilisers (2.8): disabled in these tests so the stubbed
+        # loops stay deterministic; they are exercised directly in test_history.
+        "vae_lr_scheduler": None,
+        "vae_lr_scheduler_factor": 0.5,
+        "vae_lr_scheduler_patience": 5,
+        "vae_grad_clip": None,
+        "vae_early_stopping_patience": 0,
         # `step_lstm_vae` reads these; small enough to run in milliseconds.
         "seq_len": 4,
         "seq_stride": 2,
@@ -316,6 +323,11 @@ def config(**overrides):
         "lstm_vae_num_layers": 1,
         "lstm_vae_beta": 1.0,
         "lstm_vae_kl_warmup_epochs": 0,
+        "lstm_vae_lr_scheduler": None,
+        "lstm_vae_lr_scheduler_factor": 0.5,
+        "lstm_vae_lr_scheduler_patience": 5,
+        "lstm_vae_grad_clip": None,
+        "lstm_vae_early_stopping_patience": 0,
     }
     base.update(overrides)
     return base

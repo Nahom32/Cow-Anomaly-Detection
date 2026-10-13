@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from scripts.models.training import beta_for_epoch
+from scripts.models.training import EarlyStopping, beta_for_epoch, make_scheduler, run_training_epoch
 from scripts.utils.history import empty_history
 from scripts.utils.plotting import setup_matplotlib, show_or_close
 
@@ -68,57 +68,53 @@ def vae_loss(recon_x, x, mu, logvar, beta=1.0):
 def train_vae(
     vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda",
     beta=1.0, kl_warmup_epochs=0, checkpoint=None,
+    lr_scheduler=None, lr_scheduler_factor=0.5, lr_scheduler_patience=5,
+    grad_clip=None, early_stopping=None,
 ):
     vae.to(device)
     optimizer = torch.optim.Adam(vae.parameters(), lr=lr)
+    scheduler = make_scheduler(lr_scheduler, optimizer, lr_scheduler_factor, lr_scheduler_patience)
 
     history = empty_history()
-    # The saved model used to be whatever the last epoch happened to produce, so a
-    # run whose best val was epoch 48 reported the epoch-50 weights (2.7). Track the
-    # best weights too; the caller decides which checkpoint is compared.
-    best_metric = best_epoch = best_state = None
+    # Best-weights tracking (2.7) and the stop decision (2.8) live in one tracker:
+    # the epoch early stopping would keep is the epoch whose weights are saved.
+    stopper = early_stopping if early_stopping is not None else EarlyStopping(patience=0)
 
     for epoch in range(1, epochs + 1):
         epoch_beta = beta_for_epoch(epoch, beta, kl_warmup_epochs)
-        vae.train()
-        train_loss, train_recon, train_kl = 0.0, 0.0, 0.0
-        for batch in train_loader:
-            x = batch[0].to(device) if isinstance(batch, (list, tuple)) else batch.to(device)
-            optimizer.zero_grad()
-            recon, mu, logvar = vae(x)
-            loss, recon_loss, kl_loss = vae_loss(recon, x, mu, logvar, epoch_beta)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item()
-            train_recon += recon_loss.item()
-            train_kl += kl_loss.item()
+        train_loss, train_recon, train_kl = run_training_epoch(
+            vae, train_loader, optimizer, device, vae_loss, epoch_beta, grad_clip
+        )
 
-        n_batches = len(train_loader)
         history["epoch"].append(epoch)
         history["beta"].append(epoch_beta)
-        history["train_loss"].append(train_loss / n_batches)
-        history["train_recon"].append(train_recon / n_batches)
-        history["train_kl"].append(train_kl / n_batches)
+        history["lr"].append(optimizer.param_groups[0]["lr"])
+        history["train_loss"].append(train_loss)
+        history["train_recon"].append(train_recon)
+        history["train_kl"].append(train_kl)
 
         if val_loader:
             val_loss, val_recon, val_kl = evaluate_vae(vae, val_loader, device, epoch_beta)
             history["val_loss"].append(val_loss)
             history["val_recon"].append(val_recon)
             history["val_kl"].append(val_kl)
-            print(f"Epoch {epoch:3d} | Train Loss: {history['train_loss'][-1]:.4f} | Val Loss: {history['val_loss'][-1]:.4f}")
+            print(f"Epoch {epoch:3d} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
             monitor = val_loss
         else:
-            print(f"Epoch {epoch:3d} | Train Loss: {history['train_loss'][-1]:.4f}")
-            monitor = history["train_loss"][-1]
+            print(f"Epoch {epoch:3d} | Train Loss: {train_loss:.4f}")
+            monitor = train_loss
 
-        if best_metric is None or monitor < best_metric:
-            best_metric, best_epoch = monitor, epoch
-            best_state = {k: v.detach().cpu().clone() for k, v in vae.state_dict().items()}
+        stopper.update(monitor, epoch, vae)
+        if scheduler is not None:
+            scheduler.step(monitor)
+        if stopper.should_stop:
+            print(f"Early stopping at epoch {epoch}; best was epoch {stopper.best_epoch} (2.8).")
+            break
 
     if checkpoint is not None:
-        checkpoint["best_state"] = best_state
-        checkpoint["best_epoch"] = best_epoch
-        checkpoint["best_metric"] = best_metric
+        checkpoint["best_state"] = stopper.best_state
+        checkpoint["best_epoch"] = stopper.best_epoch
+        checkpoint["best_metric"] = stopper.best
         checkpoint["final_epoch"] = history["epoch"][-1]
 
     return history

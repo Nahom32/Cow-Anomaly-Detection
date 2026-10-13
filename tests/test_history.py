@@ -6,6 +6,7 @@ import torch
 from torch.utils.data import DataLoader, SubsetRandomSampler, TensorDataset
 
 from scripts.models.lstm_vae import LSTMVAE, evaluate_lstm_vae, lstm_vae_loss, train_lstm_vae
+from scripts.models.training import EarlyStopping, make_scheduler, run_training_epoch
 from scripts.models.vae import VAE, evaluate_vae, train_vae, vae_loss
 from scripts.utils.history import HISTORY_COLUMNS, history_to_frame, save_history
 
@@ -185,6 +186,92 @@ def test_lstm_training_reports_best_and_final_epochs():
     assert checkpoint["best_epoch"] == history["val_loss"].index(best) + 1
     assert checkpoint["final_epoch"] == 3
     assert set(checkpoint["best_state"]) == set(LSTMVAE(input_dim=16).state_dict())
+
+
+def test_both_loops_log_the_learning_rate(flat_history, lstm_history):
+    for history in (flat_history, lstm_history):
+        assert history["lr"] == pytest.approx([1e-3, 1e-3])
+
+
+def test_early_stopping_keeps_the_best_epoch_and_stops():
+    model = VAE(4, hidden_dim=8, latent_dim=2)
+    stopper = EarlyStopping(patience=2)
+
+    assert stopper.update(1.0, 1, model)
+    assert not stopper.should_stop
+    assert stopper.best_epoch == 1
+    assert not stopper.update(2.0, 2, model)
+    assert not stopper.update(3.0, 3, model)
+
+    assert stopper.should_stop
+    assert stopper.best == 1.0
+    assert stopper.best_state is not None
+
+
+def test_grad_clip_is_applied_when_configured(monkeypatch):
+    calls = []
+    original = torch.nn.utils.clip_grad_norm_
+
+    def record(parameters, max_norm, *args, **kwargs):
+        calls.append(max_norm)
+        return original(parameters, max_norm, *args, **kwargs)
+
+    monkeypatch.setattr(torch.nn.utils, "clip_grad_norm_", record)
+    vae = VAE(4, hidden_dim=8, latent_dim=2)
+    loader = DataLoader(torch.randn(8, 4, generator=torch.Generator().manual_seed(0)), batch_size=4)
+
+    run_training_epoch(vae, loader, torch.optim.Adam(vae.parameters(), lr=1e-3), "cpu", vae_loss, 1.0, grad_clip=2.0)
+
+    assert calls and calls[0] == 2.0
+
+
+def test_both_models_stop_early_when_validation_stalls(monkeypatch):
+    from scripts.models import lstm_vae as lstm_module
+    from scripts.models import vae as vae_module
+
+    def constant_loss(recon, x, mu, logvar, beta=1.0):
+        anchor = recon.mean() * 0
+        return anchor + 1.0, anchor + 1.0, anchor
+
+    monkeypatch.setattr(vae_module, "vae_loss", constant_loss)
+    monkeypatch.setattr(lstm_module, "lstm_vae_loss", constant_loss)
+
+    flat_x = torch.randn(8, 4, generator=torch.Generator().manual_seed(0))
+    flat = train_vae(
+        VAE(4, hidden_dim=8, latent_dim=2), DataLoader(flat_x, batch_size=4),
+        DataLoader(flat_x, batch_size=4), epochs=5, device="cpu",
+        early_stopping=EarlyStopping(patience=1),
+    )
+    seq_x = torch.randn(8, 3, 4, generator=torch.Generator().manual_seed(0))
+    lstm = train_lstm_vae(
+        LSTMVAE(input_dim=4, hidden_dim=8, latent_dim=2), DataLoader(seq_x, batch_size=4),
+        DataLoader(seq_x, batch_size=4), epochs=5, device="cpu",
+        early_stopping=EarlyStopping(patience=1),
+    )
+
+    for history in (flat, lstm):
+        assert history["epoch"] == [1, 2]
+
+
+def test_reduce_on_plateau_halves_lr_after_a_stall():
+    optimizer = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1.0)
+    scheduler = make_scheduler("reduce_on_plateau", optimizer, factor=0.5, patience=0)
+
+    scheduler.step(1.0)
+    scheduler.step(2.0)
+
+    assert optimizer.param_groups[0]["lr"] == pytest.approx(0.5)
+
+
+def test_no_scheduler_name_means_no_scheduler():
+    optimizer = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1.0)
+    assert make_scheduler(None, optimizer) is None
+
+
+def test_unknown_scheduler_name_is_rejected():
+    optimizer = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1.0)
+    with pytest.raises(ValueError, match="unknown lr scheduler"):
+        make_scheduler("cosine", optimizer)
 
 
 def test_flat_recon_is_a_per_element_mean_not_a_sum():

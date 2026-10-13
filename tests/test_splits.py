@@ -337,10 +337,16 @@ def _pipeline_config(**overrides):
         "vae_epochs": 1, "vae_batch_size": 8, "vae_lr": 1e-3,
         "vae_hidden_dim": 8, "vae_latent_dim": 2,
         "vae_beta": 1.0, "vae_kl_warmup_epochs": 0,
+        "vae_lr_scheduler": None, "vae_lr_scheduler_factor": 0.5,
+        "vae_lr_scheduler_patience": 5, "vae_grad_clip": None,
+        "vae_early_stopping_patience": 0,
         "seq_len": SEQ_LEN, "seq_stride": SEQ_STRIDE,
         "lstm_vae_epochs": 1, "lstm_vae_batch_size": 4, "lstm_vae_lr": 1e-3,
         "lstm_vae_hidden_dim": 8, "lstm_vae_latent_dim": 2, "lstm_vae_num_layers": 1,
         "lstm_vae_beta": 1.0, "lstm_vae_kl_warmup_epochs": 0,
+        "lstm_vae_lr_scheduler": None, "lstm_vae_lr_scheduler_factor": 0.5,
+        "lstm_vae_lr_scheduler_patience": 5, "lstm_vae_grad_clip": None,
+        "lstm_vae_early_stopping_patience": 0,
     }
     config.update(overrides)
     return config

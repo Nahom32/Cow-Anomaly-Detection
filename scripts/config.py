@@ -72,6 +72,18 @@ CONFIG = {
     # it explicit and `kl_warmup_epochs` ramps it in to avoid posterior collapse.
     "vae_beta": 1.0,
     "vae_kl_warmup_epochs": 0,
+    # Optimisation stabilisers (2.8). `reduce_on_plateau` halves the LR once val
+    # stalls for `patience` epochs; early stopping then ends the run after
+    # `early_stopping_patience` stalled epochs (0 disables). Gradients are clipped
+    # to this norm before each step; both loops clip in the same place so the two
+    # models' updates stay comparable. The real logs showed LR changes at epochs
+    # 15/25/30 with no record of why, and training that kept going long past the
+    # best epoch (48) — these make both visible and bounded.
+    "vae_lr_scheduler": "reduce_on_plateau",
+    "vae_lr_scheduler_factor": 0.5,
+    "vae_lr_scheduler_patience": 5,
+    "vae_grad_clip": 1.0,
+    "vae_early_stopping_patience": 10,
 
     # LSTM-VAE
     "lstm_vae_epochs": 50,
@@ -82,6 +94,11 @@ CONFIG = {
     "lstm_vae_num_layers": 1,
     "lstm_vae_beta": 1.0,
     "lstm_vae_kl_warmup_epochs": 0,
+    "lstm_vae_lr_scheduler": "reduce_on_plateau",
+    "lstm_vae_lr_scheduler_factor": 0.5,
+    "lstm_vae_lr_scheduler_patience": 5,
+    "lstm_vae_grad_clip": 1.0,
+    "lstm_vae_early_stopping_patience": 10,
     "seq_len": 16,
     "seq_stride": 8,
 }

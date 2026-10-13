@@ -13,6 +13,7 @@ from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDa
 from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
+from scripts.models.training import EarlyStopping
 from scripts.utils.hashing import hash_json
 from scripts.utils.history import save_history
 from scripts.utils.io import atomic_torch_save
@@ -117,6 +118,11 @@ def main():
         vae, train_loader, val_loader, epochs=EPOCHS, lr=LR, device=DEVICE,
         beta=CONFIG["lstm_vae_beta"], kl_warmup_epochs=CONFIG["lstm_vae_kl_warmup_epochs"],
         checkpoint=checkpoint,
+        lr_scheduler=CONFIG["lstm_vae_lr_scheduler"],
+        lr_scheduler_factor=CONFIG["lstm_vae_lr_scheduler_factor"],
+        lr_scheduler_patience=CONFIG["lstm_vae_lr_scheduler_patience"],
+        grad_clip=CONFIG["lstm_vae_grad_clip"],
+        early_stopping=EarlyStopping(patience=CONFIG["lstm_vae_early_stopping_patience"]),
     )
 
     atomic_torch_save(os.path.join(OUTPUT_DIR, "lstm_vae_anomaly.pth"), vae.state_dict())
