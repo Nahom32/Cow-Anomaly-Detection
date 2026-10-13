@@ -46,8 +46,16 @@ class VAE(nn.Module):
         return recon, mu, logvar
 
 
-def vae_loss(recon_x, x, mu, logvar, reduction="sum"):
-    recon_loss = F.mse_loss(recon_x, x, reduction=reduction)
+def vae_loss(recon_x, x, mu, logvar):
+    """Reconstruction is a per-element MSE (2.1), not a sum.
+
+    `reduction="sum"` made the reported loss scale with `batch x dim`, so the flat
+    VAE (`batch x 256`) and the LSTM-VAE (`batch x seq x 256`) reported units 16x
+    apart — the whole source of the "~10x loss difference" (`problems_observed.md:45-63`).
+    KL stays a sum over the latent dimensions; rebalancing it against this
+    per-element reconstruction is task 2.5.
+    """
+    recon_loss = F.mse_loss(recon_x, x, reduction="mean")
     kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     total_loss = recon_loss + kl_loss
     return total_loss, recon_loss, kl_loss
@@ -66,7 +74,7 @@ def train_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"):
             x = batch[0].to(device) if isinstance(batch, (list, tuple)) else batch.to(device)
             optimizer.zero_grad()
             recon, mu, logvar = vae(x)
-            loss, recon_loss, kl_loss = vae_loss(recon, x, mu, logvar, reduction="sum")
+            loss, recon_loss, kl_loss = vae_loss(recon, x, mu, logvar)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -86,7 +94,7 @@ def train_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"):
                 for batch in val_loader:
                     x = batch[0].to(device) if isinstance(batch, (list, tuple)) else batch.to(device)
                     recon, mu, logvar = vae(x)
-                    loss, recon_loss, kl_loss = vae_loss(recon, x, mu, logvar, reduction="sum")
+                    loss, recon_loss, kl_loss = vae_loss(recon, x, mu, logvar)
                     val_loss += loss.item()
                     val_recon += recon_loss.item()
                     val_kl += kl_loss.item()

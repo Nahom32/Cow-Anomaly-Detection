@@ -3,8 +3,8 @@ import pytest
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
-from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
-from scripts.models.vae import VAE, train_vae
+from scripts.models.lstm_vae import LSTMVAE, lstm_vae_loss, train_lstm_vae
+from scripts.models.vae import VAE, train_vae, vae_loss
 from scripts.utils.history import HISTORY_COLUMNS, history_to_frame, save_history
 
 EPOCHS = 2
@@ -65,6 +65,42 @@ def test_loss_equals_recon_plus_kl(lstm_history, flat_history):
                 history[f"{split}_kl"],
             ):
                 assert total == pytest.approx(recon + kl, rel=1e-5)
+
+
+def test_flat_recon_is_a_per_element_mean_not_a_sum():
+    """2.1: `reduction="sum"` would report 8.0 here, one sum per squared element."""
+    x = torch.ones(2, 4)
+    zero = torch.zeros(2, 4)
+    mu = logvar = torch.zeros(2, 2)
+
+    _, recon_loss, _ = vae_loss(zero, x, mu, logvar)
+
+    assert recon_loss.item() == pytest.approx(1.0)
+
+
+def test_lstm_recon_does_not_scale_with_sequence_length():
+    """2.1: the sum varied with `seq_len`; the mean must not."""
+    x = torch.ones(2, 3, 4)
+    zero = torch.zeros(2, 3, 4)
+    mu = logvar = torch.zeros(2, 2)
+
+    _, recon_loss, _ = lstm_vae_loss(zero, x, mu, logvar)
+
+    assert recon_loss.item() == pytest.approx(1.0)
+
+
+def test_both_models_report_recon_on_the_same_per_element_scale():
+    """The 16x gap between the models was `batch x 256` vs `batch x 16 x 256`."""
+    x = torch.ones(2, 4)
+    zero = torch.zeros(2, 4)
+    mu = logvar = torch.zeros(2, 2)
+    flat = vae_loss(zero, x, mu, logvar)[1]
+
+    x_seq = torch.ones(2, 16, 4)
+    zero_seq = torch.zeros(2, 16, 4)
+    lstm = lstm_vae_loss(zero_seq, x_seq, mu, logvar)[1]
+
+    assert flat.item() == pytest.approx(lstm.item())
 
 
 def test_save_history_roundtrips(flat_history, tmp_path):

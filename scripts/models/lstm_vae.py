@@ -45,8 +45,15 @@ class LSTMVAE(nn.Module):
         return recon, mu, logvar
 
 
-def lstm_vae_loss(recon, x, mu, logvar, reduction="sum"):
-    recon_loss = F.mse_loss(recon, x, reduction=reduction)
+def lstm_vae_loss(recon, x, mu, logvar):
+    """Reconstruction is a per-element MSE (2.1), not a sum.
+
+    Same fix as the flat VAE's `vae_loss`: `reduction="sum"` summed over
+    `batch x seq_len x 256` elements, which made the LSTM-VAE's reported loss scale
+    with sequence length and read ~16x larger than the flat VAE's purely
+    mechanically (`problems_observed.md:45-63`). KL is left as a sum; 2.5 rebalances it.
+    """
+    recon_loss = F.mse_loss(recon, x, reduction="mean")
     kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     total_loss = recon_loss + kl_loss
     return total_loss, recon_loss, kl_loss
@@ -64,7 +71,7 @@ def train_lstm_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"
             x = batch.to(device) if not isinstance(batch, (list, tuple)) else batch[0].to(device)
             optimizer.zero_grad()
             recon, mu, logvar = vae(x)
-            loss, recon_loss, kl_loss = lstm_vae_loss(recon, x, mu, logvar, reduction="sum")
+            loss, recon_loss, kl_loss = lstm_vae_loss(recon, x, mu, logvar)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -80,7 +87,7 @@ def train_lstm_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"
             for batch in val_loader:
                 x = batch.to(device) if not isinstance(batch, (list, tuple)) else batch[0].to(device)
                 recon, mu, logvar = vae(x)
-                loss, recon_loss, kl_loss = lstm_vae_loss(recon, x, mu, logvar, reduction="sum")
+                loss, recon_loss, kl_loss = lstm_vae_loss(recon, x, mu, logvar)
                 val_loss += loss.item()
                 val_recon += recon_loss.item()
                 val_kl += kl_loss.item()

@@ -27,8 +27,8 @@ def row_reconstruction_errors(vae, rows, device, batch_size=1024):
     Scoring `decode(encode(x).mu)` is the fixed-point reconstruction Phase 2's
     deterministic-eval task (2.6) will formalise for validation too.
 
-    Mean rather than the training loss's `reduction="sum"` (task 2.1), so the
-    number does not scale with the feature dimension.
+    Per-element mean, matching the training loss's `reduction="mean"` (task 2.1),
+    so the number does not scale with the feature dimension.
     """
     rows = torch.as_tensor(rows, dtype=torch.float32)
     if len(rows) == 0:

@@ -220,11 +220,19 @@ Directly addresses problems #4, #5 and `improvements_on_vad.md:304-308`.
 
 Addresses problems #2, #3, and the loss-scale issue at `problems_observed.md:45-63`.
 
-- [ ] **2.1** Report **per-element MSE**, not a sum. Both losses use
+- [x] **2.1** Report **per-element MSE**, not a sum. Both losses use
       `F.mse_loss(..., reduction="sum")` (`vae.py:48`, `lstm_vae.py:47`), so magnitude scales with
       `batch x seq_len x 256`. The LSTM sums over `32x16x256 = 131,072` elements vs the flat VAE's
       `64x256 = 16,384` — a **16x** mechanical gap. This is the entire source of the "~10x loss
       difference". Keep `seq_len` fixed across all comparisons.
+      **Done** — both `vae_loss` and `lstm_vae_loss` now use `F.mse_loss(..., reduction="mean")`
+      and no longer take a `reduction` argument, so the sum cannot come back one call site at a
+      time. The reported recon is a per-element mean for both models: the flat VAE's
+      `batch x 256` and the LSTM-VAE's `batch x seq_len x 256` are now the same units. KL is left
+      as a latent-dimension sum for 2.5 to rebalance. Guarded by
+      `tests/test_history.py::test_flat_recon_is_a_per_element_mean_not_a_sum`,
+      `::test_lstm_recon_does_not_scale_with_sequence_length` and
+      `::test_both_models_report_recon_on_the_same_per_element_scale`.
 - [ ] **2.2** Fix the loss-averaging divisor bug in the LSTM-VAE. `lstm_vae.py:69,79` divides by
       `len(loader.dataset)`, but the loader is built with `SubsetRandomSampler`
       (`run_full_pipeline.py:226`) so `loader.dataset` is the **full** dataset, not the sampled
