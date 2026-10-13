@@ -77,9 +77,14 @@ def train_lstm_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"
             train_loss += loss.item()
             train_recon += recon_loss.item()
             train_kl += kl_loss.item()
-        avg_train_loss = train_loss / len(train_loader.dataset)
-        avg_train_recon = train_recon / len(train_loader.dataset)
-        avg_train_kl = train_kl / len(train_loader.dataset)
+        # Average over the batches drawn, not `len(loader.dataset)` (2.2). Both
+        # loaders are built with `SubsetRandomSampler`, so `loader.dataset` is the
+        # *full* dataset rather than the sampled subset, and dividing by it reported
+        # a per-sample-sum on a different scale from the flat VAE's `len(loader)`.
+        n_train_batches = len(train_loader)
+        avg_train_loss = train_loss / n_train_batches
+        avg_train_recon = train_recon / n_train_batches
+        avg_train_kl = train_kl / n_train_batches
 
         vae.eval()
         val_loss, val_recon, val_kl = 0.0, 0.0, 0.0
@@ -91,9 +96,10 @@ def train_lstm_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"
                 val_loss += loss.item()
                 val_recon += recon_loss.item()
                 val_kl += kl_loss.item()
-        avg_val_loss = val_loss / len(val_loader.dataset)
-        avg_val_recon = val_recon / len(val_loader.dataset)
-        avg_val_kl = val_kl / len(val_loader.dataset)
+        n_val_batches = len(val_loader)
+        avg_val_loss = val_loss / n_val_batches
+        avg_val_recon = val_recon / n_val_batches
+        avg_val_kl = val_kl / n_val_batches
 
         history["epoch"].append(epoch)
         history["train_loss"].append(avg_train_loss)

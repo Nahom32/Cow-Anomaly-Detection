@@ -233,11 +233,18 @@ Addresses problems #2, #3, and the loss-scale issue at `problems_observed.md:45-
       `tests/test_history.py::test_flat_recon_is_a_per_element_mean_not_a_sum`,
       `::test_lstm_recon_does_not_scale_with_sequence_length` and
       `::test_both_models_report_recon_on_the_same_per_element_scale`.
-- [ ] **2.2** Fix the loss-averaging divisor bug in the LSTM-VAE. `lstm_vae.py:69,79` divides by
+- [x] **2.2** Fix the loss-averaging divisor bug in the LSTM-VAE. `lstm_vae.py:69,79` divides by
       `len(loader.dataset)`, but the loader is built with `SubsetRandomSampler`
       (`run_full_pipeline.py:226`) so `loader.dataset` is the **full** dataset, not the sampled
       subset. Meanwhile `vae.py:82` divides by `len(loader)` (batch count). The two pipelines report
       incomparable units — one is per-batch-sum, the other a wrongly-divided per-sample-sum.
+      **Done** — `train_lstm_vae` now divides the accumulated train/val `loss`, `recon` and `kl` by
+      `len(loader)` (the batch count), matching the flat VAE's convention. `len(loader.dataset)` was
+      the full dataset under `SubsetRandomSampler`, so the "val" number moved when un-sampled data
+      was appended even though the drawn batches were identical. Guarded by
+      `tests/test_history.py::test_lstm_epoch_average_divides_by_batches_not_dataset_size`, which
+      trains on the same sampled windows behind datasets of different length and requires the same
+      average.
 - [ ] **2.3** Log recon and KL as **separate** series for both models (flat VAE already does;
       LSTM-VAE discards them).
 - [ ] **2.4** Make output ranges consistent. The flat VAE ends in `nn.Sigmoid()` (`vae.py:25`);

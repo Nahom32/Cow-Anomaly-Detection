@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 import torch
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, SubsetRandomSampler, TensorDataset
 
 from scripts.models.lstm_vae import LSTMVAE, lstm_vae_loss, train_lstm_vae
 from scripts.models.vae import VAE, train_vae, vae_loss
@@ -101,6 +101,30 @@ def test_both_models_report_recon_on_the_same_per_element_scale():
     lstm = lstm_vae_loss(zero_seq, x_seq, mu, logvar)[1]
 
     assert flat.item() == pytest.approx(lstm.item())
+
+
+def test_lstm_epoch_average_divides_by_batches_not_dataset_size():
+    """2.2: the loaders sample a subset, so `len(loader.dataset)` is the *full*
+    dataset. The reported loss must follow the batches drawn, not how much
+    unsampled data sits behind them."""
+    windows = torch.randn(8, 4, 6, generator=torch.Generator().manual_seed(0))
+    sampled = [0, 1, 2, 3]
+
+    def run(dataset):
+        torch.manual_seed(0)
+        loader = DataLoader(dataset, batch_size=2, sampler=SubsetRandomSampler(sampled))
+        return train_lstm_vae(
+            LSTMVAE(input_dim=6, hidden_dim=8, latent_dim=2),
+            loader, loader, epochs=1, device="cpu",
+        )
+
+    # Same sampled windows, datasets of different length: identical batches, so the
+    # same average. The bug divided by 4 vs 8 and made these differ by 2x.
+    small = run(windows[:4])
+    big = run(windows)
+
+    assert small["train_loss"][0] == pytest.approx(big["train_loss"][0])
+    assert small["val_loss"][0] == pytest.approx(big["val_loss"][0])
 
 
 def test_save_history_roundtrips(flat_history, tmp_path):
