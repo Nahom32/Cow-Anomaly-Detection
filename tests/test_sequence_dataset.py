@@ -4,6 +4,7 @@ import torch
 from helpers import fake_features, frame_exists, track_keys
 
 from scripts.data.feature_cache import FeatureCache, cache_signature
+from scripts.data.normalize import MinMaxNormalizer
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
 
 SEQ_LEN = 4
@@ -135,17 +136,15 @@ def test_normalised_dataset_applies_the_supplied_statistics(annotations_df):
     ds = build_dataset(annotations_df, cache)
     raw = torch.stack([ds[i] for i in range(len(ds))])
 
-    dim = raw.shape[-1]
-    mean = raw.reshape(-1, dim).mean(0)
-    std = raw.reshape(-1, dim).std(0) + 1e-8
+    normalizer = MinMaxNormalizer().fit(raw.numpy())
 
     norm = NormalisedSeqDataset(
-        mean=mean, std=std,
+        normalizer=normalizer,
         df=annotations_df, frames_dir="/nonexistent", feature_cache=cache,
         seq_len=SEQ_LEN, stride=STRIDE, normal_action_ids=[0, 1, 2],
         device="cpu", seed=42, verbose=False,
     )
-    assert torch.allclose(norm[0], (ds[0] - mean) / std, atol=1e-5)
+    assert torch.allclose(norm[0], torch.tensor(normalizer.transform(ds[0].numpy())), atol=1e-5)
 
 
 def test_dataset_never_reads_the_frames_directory(annotations_df):

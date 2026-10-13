@@ -18,7 +18,10 @@ class LSTMVAE(nn.Module):
         self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
 
         self.decoder_lstm = nn.LSTM(latent_dim, hidden_dim, num_layers, batch_first=True)
-        self.fc_out = nn.Linear(hidden_dim, input_dim)
+        # Ends in `Sigmoid` like the flat VAE (2.4): both models now min-max the
+        # features to [0, 1], so both decoders reconstruct within the same range
+        # and their reconstruction errors are on one scale.
+        self.fc_out = nn.Sequential(nn.Linear(hidden_dim, input_dim), nn.Sigmoid())
 
     def encode(self, x):
         _, (h_n, _) = self.encoder_lstm(x)

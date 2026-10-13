@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, SubsetRandomSampler
 
 from scripts.config import CONFIG
 from scripts.data.feature_cache import open_run_feature_cache
-from scripts.data.normalize import ZScoreNormalizer
+from scripts.data.normalize import MinMaxNormalizer
 from scripts.data.splits import describe, resolve_indices, resolve_split, split_params
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
 from scripts.manifest import RunManifest
@@ -83,16 +83,15 @@ def main():
     train_indices = sequence_split["train"].tolist()
     val_indices = sequence_split["val"].tolist()
 
-    # Statistics from the training sequences only (1.2). Fitting mean/std over every
+    # Statistics from the training sequences only (1.2). Fitting min/max over every
     # sequence in the run let each val window contribute to the numbers it was then
-    # normalized by.
+    # normalized by. Same min-max scaler as the flat VAE (2.4), so both models
+    # reconstruct [0, 1] features and their errors are on one scale.
     print("Computing normalisation statistics from the training sequences...")
-    normalizer = ZScoreNormalizer().fit(seq_dataset.stack(train_indices))
-    mean, std = normalizer.mean_, normalizer.std_
+    normalizer = MinMaxNormalizer().fit(seq_dataset.stack(train_indices))
 
     norm_dataset = NormalisedSeqDataset(
-        mean=mean,
-        std=std,
+        normalizer=normalizer,
         df=df,
         frames_dir=FRAMES_DIR,
         feature_extractor=feature_extractor,
@@ -116,8 +115,8 @@ def main():
 
     torch.save(vae.state_dict(), os.path.join(OUTPUT_DIR, "lstm_vae_anomaly.pth"))
     save_history(history, os.path.join(OUTPUT_DIR, "lstm_vae_training_history.csv"))
-    np.save(os.path.join(OUTPUT_DIR, "feature_mean.npy"), mean)
-    np.save(os.path.join(OUTPUT_DIR, "feature_std.npy"), std)
+    np.save(os.path.join(OUTPUT_DIR, "feature_min.npy"), normalizer.min_)
+    np.save(os.path.join(OUTPUT_DIR, "feature_max.npy"), normalizer.max_)
 
     manifest.record_split("canonical_groups", {
         name: sorted(map(str, assignment[name])) for name in ("train", "val", "test")
@@ -126,8 +125,8 @@ def main():
         name: sorted({sequence_groups[i] for i in sequence_split[name]})
         for name in ("train", "val", "test")
     })
-    manifest.record_array("lstm_vae_feature_mean", mean)
-    manifest.record_array("lstm_vae_feature_std", std)
+    manifest.record_array("lstm_vae_feature_min", normalizer.min_)
+    manifest.record_array("lstm_vae_feature_max", normalizer.max_)
     manifest.record_step("lstm_vae", config_hash=hash_json(config), n_sequences=len(seq_dataset),
                          n_train=len(train_indices), n_val=len(val_indices),
                          n_videos=len(set(sequence_groups)),

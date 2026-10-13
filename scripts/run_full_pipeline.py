@@ -16,7 +16,7 @@ from scripts.data.build_features import build_feature_dataset
 from scripts.data.create_yolo_dataset import create_yolo_dataset
 from scripts.data.download_dataset import download_dataset
 from scripts.data.feature_cache import open_run_feature_cache
-from scripts.data.normalize import MinMaxNormalizer, ZScoreNormalizer
+from scripts.data.normalize import MinMaxNormalizer
 from scripts.data.splits import describe, resolve_indices, resolve_split, split_params
 from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDataset
 from scripts.evaluation.reconstruction import (
@@ -334,16 +334,15 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
             "from an empty set. An empty coverage cell must be fixed, not summarized (1.5)."
         )
 
-    # Compute the statistics from the training sequences only (1.2). Fitting mean/std
+    # Compute the statistics from the training sequences only (1.2). Fitting min/max
     # over every sequence in the run let each val window contribute to the numbers it
-    # was then normalized by.
+    # was then normalized by. Same min-max scaler as the flat VAE (2.4), so both
+    # models reconstruct [0, 1] features and their errors are on one scale.
     print("Computing normalisation statistics from the training sequences...")
-    normalizer = ZScoreNormalizer().fit(seq_dataset.stack(train_indices))
-    mean, std = normalizer.mean_, normalizer.std_
+    normalizer = MinMaxNormalizer().fit(seq_dataset.stack(train_indices))
 
     norm_dataset = NormalisedSeqDataset(
-        mean=mean,
-        std=std,
+        normalizer=normalizer,
         df=df,
         frames_dir=frames_dir,
         feature_extractor=feature_extractor,
@@ -372,8 +371,8 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
 
     torch.save(vae.state_dict(), os.path.join(output_dir, "lstm_vae_model.pth"))
     save_history(history, os.path.join(output_dir, "lstm_vae_history.csv"))
-    np.save(os.path.join(output_dir, "lstm_vae_feature_mean.npy"), mean)
-    np.save(os.path.join(output_dir, "lstm_vae_feature_std.npy"), std)
+    np.save(os.path.join(output_dir, "lstm_vae_feature_min.npy"), normalizer.min_)
+    np.save(os.path.join(output_dir, "lstm_vae_feature_max.npy"), normalizer.max_)
 
     # Score all three splits (1.5). `norm_dataset.stack` applies exactly the
     # train-fitted mean/std the loaders saw, and this is the only read of the
@@ -401,8 +400,8 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
             name: sorted({sequence_groups[i] for i in sequence_split[name]})
             for name in ("train", "val", "test")
         })
-        manifest.record_array("lstm_vae_feature_mean", mean)
-        manifest.record_array("lstm_vae_feature_std", std)
+        manifest.record_array("lstm_vae_feature_min", normalizer.min_)
+        manifest.record_array("lstm_vae_feature_max", normalizer.max_)
         manifest.record_artifact("lstm_vae_split_scores", scores_path)
         manifest.record_step(
             7,

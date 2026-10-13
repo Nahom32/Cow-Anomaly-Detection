@@ -100,8 +100,8 @@ All artifacts are saved to `pipeline_output/`:
 | `flat_vae_feature_max.npy` | Per-feature max, fitted on the train split only |
 | `lstm_vae_model.pth` | Trained LSTM-VAE state dict |
 | `lstm_vae_history.csv` | Training loss history (recon and KL logged separately) |
-| `lstm_vae_feature_mean.npy` | Mean values for feature normalisation (train-fitted) |
-| `lstm_vae_feature_std.npy` | Std values for feature normalisation (train-fitted) |
+| `lstm_vae_feature_min.npy` | Per-feature min, fitted on the train windows only |
+| `lstm_vae_feature_max.npy` | Per-feature max, fitted on the train windows only |
 | `flat_vae_split_scores.json` | Per-sample reconstruction MSE for train/val/test |
 | `lstm_vae_split_scores.json` | Per-window reconstruction MSE for train/val/test |
 | `split_manifest.json` | The canonical `{video_id -> train|val|test}` assignment every stage reads |

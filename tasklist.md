@@ -254,9 +254,18 @@ Addresses problems #2, #3, and the loss-scale issue at `problems_observed.md:45-
       `tests/test_history.py::test_both_models_log_recon_and_kl_as_separate_series` asserts both
       models expose finite, distinct recon and KL series per split, and that each epoch's total is
       their sum.
-- [ ] **2.4** Make output ranges consistent. The flat VAE ends in `nn.Sigmoid()` (`vae.py:25`);
+- [x] **2.4** Make output ranges consistent. The flat VAE ends in `nn.Sigmoid()` (`vae.py:25`);
       the LSTM-VAE's `fc_out` does not (`lstm_vae.py:19`). Their reconstruction errors are therefore
       not on the same scale and cannot be compared.
+      **Done** — the LSTM-VAE now min-max-scales its windows with the flat VAE's `MinMaxNormalizer`
+      (replacing `ZScoreNormalizer`; persisted as `lstm_vae_feature_min/max.npy`) and its decoder
+      ends in `nn.Sigmoid()`, so both models reconstruct the same `[0, 1]` features and their
+      per-element MSEs share one scale. `NormalisedSeqDataset` takes a general `_FittedNormalizer`
+      (any object with `fit`/`transform`), which is what lets the two stages share a scaler. The
+      `ZScoreNormalizer` class stays (still unit-tested) but is no longer used by the VAE stages.
+      Guarded by `tests/test_normalization.py::test_step_lstm_vae_minmax_maps_train_into_unit_range`
+      and `::test_step_lstm_vae_held_out_windows_stay_out_of_range`, with the held-out-invariance
+      test retargeted from mean/std to min/max.
 - [ ] **2.5** Add an explicit `beta` and KL annealing. The KL term is summed over 32 latent dims
       while the recon term sums over 256 elements (`vae.py:48-49`), so the effective KL weight is
       inflated relative to a per-element MSE. `beta` is hardcoded to 1.0 with no warm-up.

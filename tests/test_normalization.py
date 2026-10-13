@@ -545,12 +545,13 @@ def test_a_test_split_with_no_feature_rows_is_rejected(tmp_path, annotations_csv
         )
 
 
-# ── The LSTM-VAE call site (1.2) ──────────────────────────────────────────
+# ── The LSTM-VAE call site (1.2, 2.4) ─────────────────────────────────────
 #
-# The z-score twin of the flat tests: `mean`/`std` must be computed from the
-# training windows only. These run `step_lstm_vae` for real with a pre-warmed
-# feature cache and a stubbed training loop, then perturb every held-out window
-# and assert the persisted statistics do not move.
+# The window twin of the flat tests: `min`/`max` must be computed from the
+# training windows only, with the same `MinMaxNormalizer` the flat VAE uses (2.4).
+# These run `step_lstm_vae` for real with a pre-warmed feature cache and a stubbed
+# training loop, then perturb every held-out window and assert the persisted
+# statistics do not move.
 
 
 @pytest.fixture
@@ -616,40 +617,50 @@ def run_step_lstm_vae(tmp_path, feature_matrix, annotations_csv, **config_overri
     finally:
         monkey.undo()
 
-    mean = np.load(tmp_path / "out" / "lstm_vae_feature_mean.npy")
-    std = np.load(tmp_path / "out" / "lstm_vae_feature_std.npy")
-    return captured, mean, std
+    min_ = np.load(tmp_path / "out" / "lstm_vae_feature_min.npy")
+    max_ = np.load(tmp_path / "out" / "lstm_vae_feature_max.npy")
+    return captured, min_, max_
 
 
 def test_step_lstm_vae_statistics_are_held_out_invariant(tmp_path, lstm_annotations_csv, features):
-    """1.2 end to end: no window outside train may move the z-score statistics."""
-    _, mean_a, std_a = run_step_lstm_vae(
+    """1.2 end to end: no window outside train may move the fitted min/max."""
+    _, min_a, max_a = run_step_lstm_vae(
         tmp_path / "a", features, lstm_annotations_csv, test_split=TEST_SPLIT
     )
     perturbed, _, held_out = perturb_held_out_rows(features, test_split=TEST_SPLIT)
-    _, mean_b, std_b = run_step_lstm_vae(
+    _, min_b, max_b = run_step_lstm_vae(
         tmp_path / "b", perturbed, lstm_annotations_csv, test_split=TEST_SPLIT
     )
 
     assert held_out.size > 0, "the held-out set must be non-empty for this to mean anything"
-    assert np.array_equal(mean_a, mean_b)
-    assert np.array_equal(std_a, std_b)
+    assert np.array_equal(min_a, min_b)
+    assert np.array_equal(max_a, max_b)
 
 
-def test_step_lstm_vae_statistics_centre_train_and_only_train(
+def test_step_lstm_vae_minmax_maps_train_into_unit_range(
     tmp_path, lstm_annotations_csv, features
 ):
-    """The loaders receive `(x - mean)/std`; a train fit zeroes *train* only."""
-    captured, mean, std = run_step_lstm_vae(
+    """2.4: the loaders receive `(x - min)/(max - min)`; a train fit sends *train* to [0, 1]."""
+    captured, min_, max_ = run_step_lstm_vae(
         tmp_path, features, lstm_annotations_csv, test_split=TEST_SPLIT
     )
     train_flat = captured["train"].reshape(-1, FEATURE_DIM)
-    val_flat = captured["val"].reshape(-1, FEATURE_DIM)
 
-    assert np.allclose(train_flat.mean(axis=0), 0.0, atol=1e-5)
-    # A val-inclusive fit would have centred val the same way; held-out windows
-    # stay off-centre, which is what makes their score comparable to train's.
-    assert np.abs(val_flat.mean(axis=0)).max() > 1e-3
+    assert min_.shape == (FEATURE_DIM,) and max_.shape == (FEATURE_DIM,)
+    assert np.allclose(train_flat.amin(dim=0).numpy(), 0.0, atol=1e-6)
+    assert np.allclose(train_flat.amax(dim=0).numpy(), 1.0, atol=1e-6)
+
+
+def test_step_lstm_vae_held_out_windows_stay_out_of_range(
+    tmp_path, lstm_annotations_csv, features
+):
+    """The shared scaler is train-fit, so an out-of-range held-out window stays out."""
+    perturbed, _, _ = perturb_held_out_rows(features, test_split=TEST_SPLIT)
+    captured, _, _ = run_step_lstm_vae(
+        tmp_path, perturbed, lstm_annotations_csv, test_split=TEST_SPLIT
+    )
+
+    assert captured["val"].max() > 1.0, "an out-of-range val window must not be rescaled into [0, 1]"
 
 
 # ── The standalone entry point ────────────────────────────────────────────

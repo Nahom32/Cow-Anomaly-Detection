@@ -186,21 +186,21 @@ class CowSequenceDataset(Dataset):
 
 
 class NormalisedSeqDataset(CowSequenceDataset):
-    """Z-scores each window with statistics the caller fitted on train only.
+    """Scales each window with a normalizer the caller fitted on train only.
 
-    `mean`/`std` arrive as constructor arguments precisely because this class
-    must never derive them itself (task 1.2): a dataset that computed its own
+    `normalizer` arrives as a constructor argument precisely because this class
+    must never derive it itself (task 1.2): a dataset that computed its own
     statistics would fit on whatever it was handed — every sequence in the run,
     val windows included — and then normalize each of those windows with numbers
-    they helped produce.
+    they helped produce. It is a shared `_FittedNormalizer` (task 2.4), so the
+    LSTM-VAE min-max-scales windows with the same object the flat VAE uses on
+    rows and both decoders can end in `Sigmoid`.
     """
 
-    def __init__(self, mean, std, **kwargs):
+    def __init__(self, normalizer, **kwargs):
         super().__init__(**kwargs)
-        self.mean = torch.as_tensor(mean, dtype=torch.float32)
-        self.std = torch.as_tensor(std, dtype=torch.float32)
+        self.normalizer = normalizer
 
     def __getitem__(self, idx):
-        seq = super().__getitem__(idx)
-        seq = (seq - self.mean) / self.std
-        return seq
+        seq = super().__getitem__(idx).numpy()
+        return torch.tensor(self.normalizer.transform(seq), dtype=torch.float32)
