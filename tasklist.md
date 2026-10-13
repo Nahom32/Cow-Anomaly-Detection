@@ -278,10 +278,17 @@ Addresses problems #2, #3, and the loss-scale issue at `problems_observed.md:45-
       `tests/test_history.py::test_both_losses_weight_kl_by_beta`,
       `::test_beta_warmup_ramps_to_beta_then_holds` and `::test_both_loops_log_the_annealed_beta`,
       with `::test_loss_equals_recon_plus_kl` retargeted to `recon + beta*kl`.
-- [ ] **2.6** Make evaluation deterministic. `reparameterize` samples unconditionally
+- [x] **2.6** Make evaluation deterministic. `reparameterize` samples unconditionally
       (`vae.py:32-35`, `lstm_vae.py:28-31`), so `val_loss` carries Monte-Carlo noise — visible as a
       **3.07-unit oscillation** across the last 10 epochs of the real `flat_vae_history.csv`.
       Use the analytic KL and a fixed set of samples (or a mean) at eval.
+      **Done** — validation no longer calls `forward`. `evaluate_vae`/`evaluate_lstm_vae`
+      reconstruct from the posterior mean (`decode(encode(x).mu)`) and use the analytic KL, so
+      `val_loss` depends only on the weights. This is the same `mu -> decode` fixed point the
+      per-split scorer already used, so a `val_loss` and a split score cannot disagree because one
+      sampled `z`. Guarded by `tests/test_history.py::test_flat_evaluation_is_deterministic_across_rng_states`
+      and `::test_lstm_evaluation_is_deterministic_across_rng_states`, which re-run the pass under
+      different global RNG seeds and require identical losses.
 - [ ] **2.7** Report **best** and **final** checkpoints and declare which one is compared (schema in
       Phase 3). The saved model is the epoch-50 checkpoint (`vae.py:107`); best val was epoch 48
       (197.90 vs 200.98 final).

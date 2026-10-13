@@ -5,8 +5,8 @@ import pytest
 import torch
 from torch.utils.data import DataLoader, SubsetRandomSampler, TensorDataset
 
-from scripts.models.lstm_vae import LSTMVAE, lstm_vae_loss, train_lstm_vae
-from scripts.models.vae import VAE, train_vae, vae_loss
+from scripts.models.lstm_vae import LSTMVAE, evaluate_lstm_vae, lstm_vae_loss, train_lstm_vae
+from scripts.models.vae import VAE, evaluate_vae, train_vae, vae_loss
 from scripts.utils.history import HISTORY_COLUMNS, history_to_frame, save_history
 
 EPOCHS = 2
@@ -125,6 +125,39 @@ def test_both_loops_log_the_annealed_beta():
     )
     for history in (flat, lstm):
         assert history["beta"] == pytest.approx([0.25, 0.5, 0.5])
+
+
+def test_flat_evaluation_is_deterministic_across_rng_states():
+    """2.6: the val pass reconstructs from `mu`, so the RNG must not move it.
+
+    Scoring through `forward` sampled `z`, which is what made `val_loss`
+    oscillate by 3.07 units over the last 10 epochs of the real history.
+    """
+    vae = VAE(4, hidden_dim=8, latent_dim=2)
+    x = torch.randn(16, 4, generator=torch.Generator().manual_seed(0))
+    loader = DataLoader(x, batch_size=8)
+
+    torch.manual_seed(0)
+    first = evaluate_vae(vae, loader, "cpu")
+    torch.manual_seed(123456)
+    second = evaluate_vae(vae, loader, "cpu")
+
+    assert first == pytest.approx(second)
+    assert all(math.isfinite(v) for v in first)
+
+
+def test_lstm_evaluation_is_deterministic_across_rng_states():
+    vae = LSTMVAE(input_dim=4, hidden_dim=8, latent_dim=2)
+    x = torch.randn(16, 3, 4, generator=torch.Generator().manual_seed(0))
+    loader = DataLoader(x, batch_size=8)
+
+    torch.manual_seed(0)
+    first = evaluate_lstm_vae(vae, loader, "cpu")
+    torch.manual_seed(123456)
+    second = evaluate_lstm_vae(vae, loader, "cpu")
+
+    assert first == pytest.approx(second)
+    assert all(math.isfinite(v) for v in first)
 
 
 def test_flat_recon_is_a_per_element_mean_not_a_sum():

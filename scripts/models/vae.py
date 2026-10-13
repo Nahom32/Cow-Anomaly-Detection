@@ -94,25 +94,40 @@ def train_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda", bet
         history["train_kl"].append(train_kl / n_batches)
 
         if val_loader:
-            vae.eval()
-            val_loss, val_recon, val_kl = 0.0, 0.0, 0.0
-            with torch.no_grad():
-                for batch in val_loader:
-                    x = batch[0].to(device) if isinstance(batch, (list, tuple)) else batch.to(device)
-                    recon, mu, logvar = vae(x)
-                    loss, recon_loss, kl_loss = vae_loss(recon, x, mu, logvar, epoch_beta)
-                    val_loss += loss.item()
-                    val_recon += recon_loss.item()
-                    val_kl += kl_loss.item()
-            n_val = len(val_loader)
-            history["val_loss"].append(val_loss / n_val)
-            history["val_recon"].append(val_recon / n_val)
-            history["val_kl"].append(val_kl / n_val)
+            val_loss, val_recon, val_kl = evaluate_vae(vae, val_loader, device, epoch_beta)
+            history["val_loss"].append(val_loss)
+            history["val_recon"].append(val_recon)
+            history["val_kl"].append(val_kl)
             print(f"Epoch {epoch:3d} | Train Loss: {history['train_loss'][-1]:.4f} | Val Loss: {history['val_loss'][-1]:.4f}")
         else:
             print(f"Epoch {epoch:3d} | Train Loss: {history['train_loss'][-1]:.4f}")
 
     return history
+
+
+def evaluate_vae(vae, loader, device, beta=1.0):
+    """Deterministic validation pass (2.6).
+
+    `VAE.forward` reparameterises, so scoring through it made `val_loss` a
+    function of the RNG: the Monte-Carlo noise is visible as a 3.07-unit
+    oscillation across the last 10 epochs of the real `flat_vae_history.csv`.
+    Reconstructing from the posterior mean and using the analytic KL makes the
+    number depend only on the weights, matching the fixed-point scoring in
+    `scripts/evaluation/reconstruction.py`.
+    """
+    vae.eval()
+    loss, recon, kl = 0.0, 0.0, 0.0
+    with torch.no_grad():
+        for batch in loader:
+            x = batch[0].to(device) if isinstance(batch, (list, tuple)) else batch.to(device)
+            mu, logvar = vae.encode(x)
+            recon_x = vae.decode(mu)
+            total, recon_loss, kl_loss = vae_loss(recon_x, x, mu, logvar, beta)
+            loss += total.item()
+            recon += recon_loss.item()
+            kl += kl_loss.item()
+    n_batches = len(loader)
+    return loss / n_batches, recon / n_batches, kl / n_batches
 
 
 def plot_history(history, save_path=None, headless=None):

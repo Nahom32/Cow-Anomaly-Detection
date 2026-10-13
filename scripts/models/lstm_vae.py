@@ -93,20 +93,7 @@ def train_lstm_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"
         avg_train_recon = train_recon / n_train_batches
         avg_train_kl = train_kl / n_train_batches
 
-        vae.eval()
-        val_loss, val_recon, val_kl = 0.0, 0.0, 0.0
-        with torch.no_grad():
-            for batch in val_loader:
-                x = batch.to(device) if not isinstance(batch, (list, tuple)) else batch[0].to(device)
-                recon, mu, logvar = vae(x)
-                loss, recon_loss, kl_loss = lstm_vae_loss(recon, x, mu, logvar, epoch_beta)
-                val_loss += loss.item()
-                val_recon += recon_loss.item()
-                val_kl += kl_loss.item()
-        n_val_batches = len(val_loader)
-        avg_val_loss = val_loss / n_val_batches
-        avg_val_recon = val_recon / n_val_batches
-        avg_val_kl = val_kl / n_val_batches
+        avg_val_loss, avg_val_recon, avg_val_kl = evaluate_lstm_vae(vae, val_loader, device, epoch_beta)
 
         history["epoch"].append(epoch)
         history["beta"].append(epoch_beta)
@@ -119,3 +106,25 @@ def train_lstm_vae(vae, train_loader, val_loader, epochs, lr=1e-3, device="cuda"
         print(f"Epoch {epoch:3d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
 
     return history
+
+
+def evaluate_lstm_vae(vae, loader, device, beta=1.0):
+    """Deterministic validation pass (2.6), the LSTM twin of `evaluate_vae`.
+
+    `LSTMVAE.forward` reparameterises, so scoring through it made `val_loss` a
+    function of the RNG. Reconstructing from the posterior mean and using the
+    analytic KL makes the number depend only on the weights.
+    """
+    vae.eval()
+    loss, recon, kl = 0.0, 0.0, 0.0
+    with torch.no_grad():
+        for batch in loader:
+            x = batch.to(device) if not isinstance(batch, (list, tuple)) else batch[0].to(device)
+            mu, logvar = vae.encode(x)
+            recon_x = vae.decode(mu, seq_len=x.size(1))
+            total, recon_loss, kl_loss = lstm_vae_loss(recon_x, x, mu, logvar, beta)
+            loss += total.item()
+            recon += recon_loss.item()
+            kl += kl_loss.item()
+    n_batches = len(loader)
+    return loss / n_batches, recon / n_batches, kl / n_batches

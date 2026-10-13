@@ -24,8 +24,9 @@ def row_reconstruction_errors(vae, rows, device, batch_size=1024):
     Deterministic on purpose. `VAE.forward` samples z from the posterior, so
     scoring through `forward` would make the reported test number a function of
     the RNG — a rerun could move it without anything about the data changing.
-    Scoring `decode(encode(x).mu)` is the fixed-point reconstruction Phase 2's
-    deterministic-eval task (2.6) will formalise for validation too.
+    Scoring `decode(encode(x).mu)` is the fixed-point reconstruction that Phase 2's
+    deterministic-eval task (2.6) also uses for validation, so a split score and a
+    reported `val_loss` cannot disagree because one sampled `z` and the other did not.
 
     Per-element mean, matching the training loss's `reduction="mean"` (task 2.1),
     so the number does not scale with the feature dimension.
