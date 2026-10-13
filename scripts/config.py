@@ -99,6 +99,13 @@ CONFIG = {
     "lstm_vae_lr_scheduler_patience": 5,
     "lstm_vae_grad_clip": 1.0,
     "lstm_vae_early_stopping_patience": 10,
+    # 2.11: the flat VAE (111,424 params) and the LSTM-VAE (321,856) differ 2.9x,
+    # so an unqualified Flat-vs-LSTM result confounds temporal modelling with
+    # capacity (problem #13). When true, the LSTM-VAE's hidden width is solved to
+    # match the flat VAE's parameter budget and the achieved counts are recorded.
+    # Off by default so the standard model is unchanged; a benchmark can run both
+    # arms to show whether the comparison survives capacity-matching.
+    "lstm_vae_match_flat_parameters": False,
     "seq_len": 16,
     "seq_stride": 8,
 }

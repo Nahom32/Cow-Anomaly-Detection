@@ -7,7 +7,7 @@ from scripts.utils.history import empty_history
 
 
 class LSTMVAE(nn.Module):
-    def __init__(self, input_dim=256, hidden_dim=128, latent_dim=32, num_layers=1):
+    def __init__(self, input_dim, hidden_dim=128, latent_dim=32, num_layers=1):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim

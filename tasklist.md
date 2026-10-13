@@ -329,11 +329,36 @@ Addresses problems #2, #3, and the loss-scale issue at `problems_observed.md:45-
       **Done** — `train_lstm_vae` now mirrors the flat VAE: with no val loader it skips
       `evaluate_lstm_vae` (which divided by `len(loader) == 0`) and monitors the train loss instead.
       Guarded by `test_history.py::test_lstm_training_without_validation_does_not_divide_by_zero`.
-- [ ] **2.11** Report a **parameter-matched** baseline. Flat VAE is 111,424 params, LSTM-VAE is
+- [x] **2.11** Report a **parameter-matched** baseline. Flat VAE is 111,424 params, LSTM-VAE is
       321,856 (2.9x). Any observed difference is currently confounded with capacity (problem #13).
-- [ ] **2.12** Derive `input_dim` from the feature array instead of hardcoding `256` in four places:
+      **Done** — the size gap is measured and made controllable, not just reported.
+      `count_parameters` gives the trainable count and `match_parameter_budget(build_model,
+      target, ...)` in `scripts/models/training.py` widens a model until its count reaches the
+      target, returning the closest width. `CONFIG["lstm_vae_match_flat_parameters"]` (default
+      `False`) sizes the LSTM-VAE to the flat VAE's budget in both `step_lstm_vae` and the
+      standalone pipeline; at the documented dims that solves to hidden 57 (111,128 vs 111,424
+      params, 0.27% off, 1.00x). Each stage records `input_dim` and `n_parameters`, and step 7
+      additionally records `flat_n_parameters`, `parameter_ratio_vs_flat`, `parameter_matched`
+      and the `lstm_vae_hidden_dim` actually used, so a matched run is distinguishable from a
+      default-width one. Guarded by `test_history.py::test_parameter_counts_match_the_documented_architecture`,
+      `::test_match_parameter_budget_lands_within_a_fraction_of_a_percent`,
+      `::test_match_parameter_budget_picks_the_closest_neighbouring_width`,
+      `::test_match_parameter_budget_stops_at_the_first_width_reaching_the_target` and
+      `test_splits.py::test_matching_parameters_resizes_the_lstm_to_the_flat_budget` (with
+      `::test_both_stages_record_parameter_counts` for the recording).
+- [x] **2.12** Derive `input_dim` from the feature array instead of hardcoding `256` in four places:
       `lstm_vae.py:7`, `run_full_pipeline.py:229`, `train_lstm_vae_pipeline.py:77`,
       `sequence_dataset.py:111`.
+      **Done** — `LSTMVAE.__init__` no longer defaults `input_dim` to 256, and
+      `CowSequenceDataset` derives `feature_dim` from the cache array itself (the
+      `FEATURE_DIM_FALLBACK` constant is deleted; the width is read after
+      `_resolve_sequence_rows` has populated the cache, and an empty cache raises rather than
+      falling back to a constant). Both `step_lstm_vae` and the standalone pipeline build the
+      model from `seq_dataset.feature_dim`, and both record `input_dim` in the manifest. The
+      two-stage test harnesses no longer monkeypatch a 256-wide model to fit FEATURE_DIM-wide
+      fixtures — they now exercise the real derivation. Guarded by
+      `test_history.py::test_lstm_vae_demands_an_explicit_input_dim` and
+      `test_sequence_dataset.py::test_feature_dim_is_derived_from_the_cache`.
 
 ---
 

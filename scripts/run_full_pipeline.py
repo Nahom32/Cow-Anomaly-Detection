@@ -28,7 +28,7 @@ from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
 from scripts.models.train_yolo_n import train_yolo26n
-from scripts.models.training import EarlyStopping
+from scripts.models.training import EarlyStopping, count_parameters, match_parameter_budget
 from scripts.models.vae import VAE, plot_history, train_vae
 from scripts.utils.hashing import hash_json, sha256_file
 from scripts.utils.history import save_history
@@ -266,6 +266,7 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     # artifacts keep their meaning; `flat_vae_best.pth` is the best-val epoch (2.7).
     atomic_torch_save(os.path.join(output_dir, "flat_vae_model.pth"), vae.state_dict())
     _save_best_checkpoint(checkpoint, os.path.join(output_dir, "flat_vae_best.pth"), "flat VAE")
+    print(f"  flat VAE parameters: {count_parameters(vae):,} (recorded for the 2.11 comparison)")
     np.save(os.path.join(output_dir, "flat_vae_feature_min.npy"), normalizer.min_)
     np.save(os.path.join(output_dir, "flat_vae_feature_max.npy"), normalizer.max_)
 
@@ -310,6 +311,8 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
             n_train=int(X_train.shape[0]),
             n_val=int(X_val.shape[0]),
             n_test=int(test_idx.shape[0]),
+            input_dim=int(features.shape[1]),
+            n_parameters=count_parameters(vae),
             normalizer_fit_on="train",
             # 2.7: which epoch each checkpoint is, and which one the split scores use.
             best_epoch=checkpoint.get("best_epoch"),
@@ -394,12 +397,38 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
     # weights. `Subset` covers every val window exactly once, in split order.
     val_loader = DataLoader(Subset(norm_dataset, val_indices), batch_size=config["lstm_vae_batch_size"], shuffle=False)
 
-    vae = LSTMVAE(
-        input_dim=256,
-        hidden_dim=config["lstm_vae_hidden_dim"],
-        latent_dim=config["lstm_vae_latent_dim"],
-        num_layers=config["lstm_vae_num_layers"],
+    # `input_dim` is read from the extracted features rather than hardcoded to 256
+    # (2.12): a different backbone or hooked layer produces a different width, and
+    # a stale constant would fail at the first `nn.Linear` instead of adapting.
+    input_dim = seq_dataset.feature_dim
+    # The flat VAE's parameter count is the capacity the LSTM-VAE is measured
+    # against (2.11). Derived from the same features and config step 6 used, so it
+    # does not depend on step 6 having run in this invocation.
+    flat_parameters = count_parameters(
+        VAE(input_dim, hidden_dim=config["vae_hidden_dim"], latent_dim=config["vae_latent_dim"])
     )
+    parameter_matched = bool(config["lstm_vae_match_flat_parameters"])
+    lstm_hidden_dim = config["lstm_vae_hidden_dim"]
+    if parameter_matched:
+        lstm_hidden_dim, vae, _ = match_parameter_budget(
+            lambda width: LSTMVAE(
+                input_dim=input_dim, hidden_dim=width,
+                latent_dim=config["lstm_vae_latent_dim"],
+                num_layers=config["lstm_vae_num_layers"],
+            ),
+            flat_parameters,
+        )
+        print(
+            f"  parameter match: LSTM hidden {config['lstm_vae_hidden_dim']} -> {lstm_hidden_dim} "
+            f"targeting the flat VAE's {flat_parameters:,} params"
+        )
+    else:
+        vae = LSTMVAE(
+            input_dim=input_dim,
+            hidden_dim=lstm_hidden_dim,
+            latent_dim=config["lstm_vae_latent_dim"],
+            num_layers=config["lstm_vae_num_layers"],
+        )
     checkpoint = {}
 
     history = train_lstm_vae(
@@ -418,6 +447,15 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
     # is written alongside and named in the manifest (2.7).
     atomic_torch_save(os.path.join(output_dir, "lstm_vae_model.pth"), vae.state_dict())
     _save_best_checkpoint(checkpoint, os.path.join(output_dir, "lstm_vae_best.pth"), "LSTM-VAE")
+    # 2.11: the LSTM-VAE is ~2.9x the flat VAE, so an unqualified win would be a
+    # size win. The ratio is printed and recorded next to the flat count, and the
+    # width actually used is recorded so a matched run is distinguishable from a
+    # default-sized one.
+    n_parameters = count_parameters(vae)
+    ratio = n_parameters / flat_parameters
+    match_note = "parameter-matched to the flat VAE" if parameter_matched else "default width"
+    print(f"  LSTM-VAE parameters: {n_parameters:,} ({ratio:.2f}x the flat VAE's "
+          f"{flat_parameters:,}; {match_note})")
     save_history(history, os.path.join(output_dir, "lstm_vae_history.csv"))
     np.save(os.path.join(output_dir, "lstm_vae_feature_min.npy"), normalizer.min_)
     np.save(os.path.join(output_dir, "lstm_vae_feature_max.npy"), normalizer.max_)
@@ -461,6 +499,12 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
             n_val=len(val_indices),
             n_test=len(test_indices),
             n_videos=len(set(sequence_groups)),
+            input_dim=int(input_dim),
+            n_parameters=n_parameters,
+            flat_n_parameters=flat_parameters,
+            parameter_ratio_vs_flat=ratio,
+            parameter_matched=parameter_matched,
+            lstm_vae_hidden_dim=int(lstm_hidden_dim),
             normalizer_fit_on="train",
             # 2.7: checkpoint identity and which one the split scores use.
             best_epoch=checkpoint.get("best_epoch"),

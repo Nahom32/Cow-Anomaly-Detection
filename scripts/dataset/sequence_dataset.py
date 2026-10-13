@@ -13,8 +13,6 @@ from scripts.data.feature_cache import (
 )
 from scripts.utils.seeding import DEFAULT_SEED, rng_for
 
-FEATURE_DIM_FALLBACK = 256
-
 
 def frame_feature_key(frame, video_id, fps=25):
     """Cache key for one `(timestamp, x1, y1, x2, y2)` row of a track."""
@@ -47,7 +45,6 @@ class CowSequenceDataset(Dataset):
         noise_std=0.05,
         device="cuda",
         seed=DEFAULT_SEED,
-        feature_dim=FEATURE_DIM_FALLBACK,
         verbose=True,
     ):
         self.df = df
@@ -81,8 +78,18 @@ class CowSequenceDataset(Dataset):
                 self.sequences.append((key, start))
 
         self.feature_cache = self._resolve_cache(feature_cache, verbose=verbose)
-        self.feature_dim = self.feature_cache.feature_dim or feature_dim
+        # The feature width comes from the extracted array, not a hardcoded 256
+        # (2.12). `_resolve_sequence_rows` populates the cache, so read the width
+        # only after it: a cold cache has no dim yet, and falling back to a
+        # constant would make the model width depend on a guess instead of the
+        # data the backbone actually produced.
         self.sequence_rows = self._resolve_sequence_rows()
+        self.feature_dim = self.feature_cache.feature_dim
+        if self.feature_dim is None:
+            raise RuntimeError(
+                "the feature cache is empty, so the feature dimension cannot be "
+                "derived from the data (2.12)"
+            )
 
     def __len__(self):
         return len(self.sequences)

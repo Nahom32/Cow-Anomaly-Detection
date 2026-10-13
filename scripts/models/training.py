@@ -52,6 +52,40 @@ def run_training_epoch(vae, loader, optimizer, device, loss_fn, beta, grad_clip=
     return total / n_batches, recon / n_batches, kl / n_batches
 
 
+def count_parameters(model):
+    """Trainable parameter count (2.11).
+
+    The flat VAE is 111,424 parameters and the LSTM-VAE 321,856 — a 2.89x gap. A
+    Flat-vs-LSTM comparison that does not report this is comparing two model sizes
+    and calling the difference "temporal modelling", which is what the research
+    question exists to rule out.
+    """
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def match_parameter_budget(build_model, target_parameters, max_width=4096):
+    """The model whose trainable size is closest to `target_parameters` (2.11).
+
+    `build_model(width)` must return a fresh model at the given width. Parameter
+    count is monotonic in width for the architectures here, so this widens until
+    it reaches the target and keeps whichever of the last two widths is closer.
+    Returns `(width, model, n_parameters)`.
+
+    This is what turns "the LSTM-VAE is 2.9x the flat VAE" from a caveat into a
+    controlled comparison (problem #13): the temporal model is sized down to the
+    baseline's capacity, so a difference is not a difference in model size.
+    """
+    best = None
+    for width in range(1, max_width + 1):
+        model = build_model(width)
+        n_parameters = count_parameters(model)
+        if best is None or abs(n_parameters - target_parameters) < abs(best[2] - target_parameters):
+            best = (width, model, n_parameters)
+        if n_parameters >= target_parameters:
+            break
+    return best
+
+
 def make_scheduler(name, optimizer, factor=0.5, patience=5):
     """Build the configured LR scheduler, or `None` (2.8).
 

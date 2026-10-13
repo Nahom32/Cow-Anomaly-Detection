@@ -49,6 +49,15 @@ def test_windows_are_built_from_tracks(annotations_df, in_memory_cache):
     assert ds.feature_dim == fake_features(track_keys(annotations_df)[0]).shape[0]
 
 
+def test_feature_dim_is_derived_from_the_cache(annotations_df, in_memory_cache):
+    """2.12: the width is the extracted array's, not a hardcoded 256."""
+    in_memory_cache.ensure(
+        track_keys(annotations_df), lambda key: fake_features(key, dim=5), verbose=False
+    )
+    ds = build_dataset(annotations_df, in_memory_cache)
+    assert ds.feature_dim == 5
+
+
 def test_normal_action_filter_is_applied(annotations_df, in_memory_cache):
     in_memory_cache.ensure(track_keys(annotations_df), fake_features, verbose=False)
     filtered = annotations_df.copy()

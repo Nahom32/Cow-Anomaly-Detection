@@ -328,6 +328,7 @@ def config(**overrides):
         "lstm_vae_lr_scheduler_patience": 5,
         "lstm_vae_grad_clip": None,
         "lstm_vae_early_stopping_patience": 0,
+        "lstm_vae_match_flat_parameters": False,
     }
     base.update(overrides)
     return base
@@ -635,16 +636,9 @@ def run_step_lstm_vae(tmp_path, feature_matrix, annotations_csv, **config_overri
     cache.ensure(keys, lambda key: feature_matrix[index_of[key]], verbose=False)
 
     monkey.setattr(pipeline, "train_lstm_vae", _fake_lstm_train(captured))
-    # The stage hardcodes `input_dim=256` (task 2.12, Phase 2) while these
-    # features are FEATURE_DIM-wide; the factory matches the model to the data
-    # so the real scoring pass can run. The normalisation under test does not
-    # depend on the model's width.
-    real_lstm_vae = pipeline.LSTMVAE
-    monkey.setattr(
-        pipeline, "LSTMVAE",
-        lambda input_dim, hidden_dim, latent_dim, num_layers:
-            real_lstm_vae(FEATURE_DIM, hidden_dim, latent_dim, num_layers),
-    )
+    # `input_dim` is derived from this FEATURE_DIM-wide cache (2.12), so the real
+    # scoring pass runs without forcing the model width; the normalisation under
+    # test does not depend on it.
     try:
         step_lstm_vae(
             annotations_csv, str(tmp_path / "frames"), None, "cpu",

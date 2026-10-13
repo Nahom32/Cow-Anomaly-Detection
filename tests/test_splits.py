@@ -347,6 +347,7 @@ def _pipeline_config(**overrides):
         "lstm_vae_lr_scheduler": None, "lstm_vae_lr_scheduler_factor": 0.5,
         "lstm_vae_lr_scheduler_patience": 5, "lstm_vae_grad_clip": None,
         "lstm_vae_early_stopping_patience": 0,
+        "lstm_vae_match_flat_parameters": False,
     }
     config.update(overrides)
     return config
@@ -427,7 +428,9 @@ def run_two_stages(tmp_path, **config_overrides):
 
     def with_cache(cls):
         def build(df, **kwargs):
-            kwargs.update(feature_cache=cache, feature_extractor=None, feature_dim=FEATURE_DIM)
+            # No `feature_dim` is passed: the dataset derives it from this cache's
+            # array, which is exactly the 2.12 behaviour under test.
+            kwargs.update(feature_cache=cache, feature_extractor=None)
             return cls(df=df, **kwargs)
         return build
 
@@ -435,15 +438,6 @@ def run_two_stages(tmp_path, **config_overrides):
     # `feature_cache=None`, so the pre-warmed one is injected here for both.
     monkey.setattr(pipeline, "CowSequenceDataset", with_cache(real_sequence_dataset))
     monkey.setattr(pipeline, "NormalisedSeqDataset", with_cache(real_normalised_dataset))
-    # The stage hardcodes `input_dim=256` (task 2.12) but this fixture's features
-    # are FEATURE_DIM-wide; the factory matches the model to the data so the real
-    # scoring pass in step 7 can run.
-    real_lstm_vae = pipeline.LSTMVAE
-    monkey.setattr(
-        pipeline, "LSTMVAE",
-        lambda input_dim, hidden_dim, latent_dim, num_layers:
-            real_lstm_vae(FEATURE_DIM, hidden_dim, latent_dim, num_layers),
-    )
     for name in ("train_vae", "train_lstm_vae"):
         patch = record(pipeline, name, captured)
         try:
@@ -610,6 +604,36 @@ def test_both_stages_record_the_test_split_they_used(tmp_path):
     assert steps["6"]["split_sha256"] == steps["7"]["split_sha256"]
     canonical = run["manifest"].data["splits"]["canonical_groups"]
     assert canonical["sizes"]["test"] == len(payload["assignment"]["test"])
+
+
+def test_both_stages_record_parameter_counts(tmp_path):
+    """2.11: the flat/LSTM size gap is recorded beside the losses, not left implicit."""
+    steps = run_two_stages(tmp_path)["manifest"].data["steps"]
+
+    assert steps["6"]["n_parameters"] > 0
+    assert steps["7"]["n_parameters"] > steps["6"]["n_parameters"]
+    assert steps["7"]["flat_n_parameters"] == steps["6"]["n_parameters"]
+    assert steps["7"]["parameter_ratio_vs_flat"] == pytest.approx(
+        steps["7"]["n_parameters"] / steps["6"]["n_parameters"]
+    )
+
+
+def test_matching_parameters_resizes_the_lstm_to_the_flat_budget(tmp_path):
+    """2.11: with the flag on, step 7 is sized to step 6's capacity, not left 2.9x larger."""
+    from scripts.models.lstm_vae import LSTMVAE
+    from scripts.models.training import count_parameters
+
+    steps = run_two_stages(tmp_path, lstm_vae_match_flat_parameters=True)["manifest"].data["steps"]
+
+    assert steps["7"]["parameter_matched"] is True
+    assert steps["7"]["flat_n_parameters"] == steps["6"]["n_parameters"]
+    matched = steps["7"]["parameter_ratio_vs_flat"]
+    default_width = count_parameters(
+        LSTMVAE(input_dim=steps["7"]["input_dim"], hidden_dim=8, latent_dim=2, num_layers=1)
+    ) / steps["6"]["n_parameters"]
+
+    assert matched < default_width, "matching must close the capacity gap, not widen it"
+    assert 0.8 < matched < 1.3
 
 
 def test_the_test_split_is_scored_in_both_reports(tmp_path):

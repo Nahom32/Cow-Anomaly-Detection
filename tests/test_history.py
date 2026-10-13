@@ -6,7 +6,13 @@ import torch
 from torch.utils.data import DataLoader, SubsetRandomSampler, TensorDataset
 
 from scripts.models.lstm_vae import LSTMVAE, evaluate_lstm_vae, lstm_vae_loss, train_lstm_vae
-from scripts.models.training import EarlyStopping, make_scheduler, run_training_epoch
+from scripts.models.training import (
+    EarlyStopping,
+    count_parameters,
+    make_scheduler,
+    match_parameter_budget,
+    run_training_epoch,
+)
 from scripts.models.vae import VAE, evaluate_vae, train_vae, vae_loss
 from scripts.utils.history import HISTORY_COLUMNS, history_to_frame, save_history
 
@@ -347,6 +353,57 @@ def test_lstm_epoch_average_divides_by_batches_not_dataset_size():
 
     assert small["train_loss"][0] == pytest.approx(big["train_loss"][0])
     assert small["val_loss"][0] == pytest.approx(big["val_loss"][0])
+
+
+def test_lstm_vae_demands_an_explicit_input_dim():
+    """2.12: the default `256` was the hardcode `input_dim` was derived from."""
+    with pytest.raises(TypeError):
+        LSTMVAE()
+
+
+def test_parameter_counts_match_the_documented_architecture():
+    """2.11: 111,424 vs 321,856 is the size gap the matched baseline controls for."""
+    assert count_parameters(VAE(256, hidden_dim=128, latent_dim=32)) == 111424
+    assert count_parameters(
+        LSTMVAE(input_dim=256, hidden_dim=128, latent_dim=32, num_layers=1)
+    ) == 321856
+
+
+def test_match_parameter_budget_lands_within_a_fraction_of_a_percent():
+    """2.11: the LSTM-VAE resized to the flat VAE's budget must actually be close."""
+    target = count_parameters(VAE(256, hidden_dim=128, latent_dim=32))
+    width, model, matched = match_parameter_budget(
+        lambda hidden: LSTMVAE(input_dim=256, hidden_dim=hidden, latent_dim=32, num_layers=1),
+        target,
+    )
+
+    assert count_parameters(model) == matched
+    assert matched <= target * 1.01, "a matched model must not exceed the budget materially"
+    assert abs(matched - target) / target < 0.01
+
+
+def test_match_parameter_budget_picks_the_closest_neighbouring_width():
+    """Optimality, not a magic number: no adjacent width is closer than the choice."""
+    target = count_parameters(VAE(256, hidden_dim=128, latent_dim=32))
+    build = lambda hidden: LSTMVAE(  # noqa: E731
+        input_dim=256, hidden_dim=hidden, latent_dim=32, num_layers=1
+    )
+    width, _, matched = match_parameter_budget(build, target)
+
+    for neighbour in (width - 1, width + 1):
+        assert abs(matched - target) <= abs(count_parameters(build(neighbour)) - target)
+
+
+def test_match_parameter_budget_stops_at_the_first_width_reaching_the_target():
+    """Monotonic widths mean the search must not walk to the cap once it has arrived."""
+    widths = []
+    match_parameter_budget(
+        lambda hidden: widths.append(hidden) or LSTMVAE(input_dim=64, hidden_dim=hidden, latent_dim=4),
+        target_parameters=1500,
+        max_width=10,
+    )
+    assert widths == list(range(1, len(widths) + 1))
+    assert len(widths) < 10
 
 
 def test_save_history_roundtrips(flat_history, tmp_path):

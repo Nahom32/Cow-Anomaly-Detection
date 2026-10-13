@@ -13,7 +13,8 @@ from scripts.dataset.sequence_dataset import CowSequenceDataset, NormalisedSeqDa
 from scripts.manifest import RunManifest
 from scripts.models.feature_extractor import create_feature_extractor
 from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
-from scripts.models.training import EarlyStopping
+from scripts.models.training import EarlyStopping, count_parameters, match_parameter_budget
+from scripts.models.vae import VAE
 from scripts.utils.hashing import hash_json
 from scripts.utils.history import save_history
 from scripts.utils.io import atomic_torch_save
@@ -44,7 +45,8 @@ def main():
     config = {"model": "lstm_vae", "seed": SEED, "epochs": EPOCHS, "batch_size": BATCH_SIZE, "lr": LR,
               "normal_action_ids": NORMAL_ACTION_IDS, "feature_layer": 9, "seq_len": SEQ_LEN,
               "stride": STRIDE, "val_split": CONFIG["val_split"], "test_split": CONFIG["test_split"],
-              "split_group_key": SPLIT_GROUP_KEY, "yolo_weights": YOLO_MODEL_PATH}
+              "split_group_key": SPLIT_GROUP_KEY, "yolo_weights": YOLO_MODEL_PATH,
+              "match_flat_parameters": CONFIG["lstm_vae_match_flat_parameters"]}
     manifest = RunManifest.create(OUTPUT_DIR, config, seed=SEED, device=DEVICE)
     manifest.record_artifact("yolo_weights", YOLO_MODEL_PATH)
     manifest.record_artifact("annotations_csv", ANNOTATIONS_CSV)
@@ -110,7 +112,27 @@ def main():
     # Full, ordered validation pass (2.9); see step_lstm_vae.
     val_loader = DataLoader(Subset(norm_dataset, val_indices), batch_size=BATCH_SIZE, shuffle=False)
 
-    vae = LSTMVAE(input_dim=256, hidden_dim=128, latent_dim=32, num_layers=1)
+    # Width from the extracted features, not a hardcoded 256 (2.12). When the
+    # config asks for it, the LSTM-VAE is sized to the flat VAE's parameter budget
+    # so the comparison is not confounded by capacity (2.11).
+    input_dim = seq_dataset.feature_dim
+    flat_parameters = count_parameters(
+        VAE(input_dim, hidden_dim=CONFIG["vae_hidden_dim"], latent_dim=CONFIG["vae_latent_dim"])
+    )
+    parameter_matched = bool(CONFIG["lstm_vae_match_flat_parameters"])
+    if parameter_matched:
+        lstm_hidden_dim, vae, _ = match_parameter_budget(
+            lambda width: LSTMVAE(input_dim=input_dim, hidden_dim=width,
+                                  latent_dim=CONFIG["lstm_vae_latent_dim"],
+                                  num_layers=CONFIG["lstm_vae_num_layers"]),
+            flat_parameters,
+        )
+        print(f"Parameter-matched LSTM-VAE: hidden width {lstm_hidden_dim} "
+              f"for the flat VAE's {flat_parameters:,} params (2.11)")
+    else:
+        vae = LSTMVAE(input_dim=input_dim, hidden_dim=CONFIG["lstm_vae_hidden_dim"],
+                      latent_dim=CONFIG["lstm_vae_latent_dim"],
+                      num_layers=CONFIG["lstm_vae_num_layers"])
 
     print("Starting LSTM-VAE training...")
     checkpoint = {}
