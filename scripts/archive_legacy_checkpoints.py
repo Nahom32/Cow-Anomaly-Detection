@@ -6,7 +6,6 @@ This moves them to an archive directory with a sidecar .json note.
 """
 
 import argparse
-import json
 import os
 import shutil
 from datetime import datetime
