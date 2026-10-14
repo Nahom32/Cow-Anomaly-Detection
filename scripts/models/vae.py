@@ -3,8 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from scripts.models.training import EarlyStopping, beta_for_epoch, make_scheduler, run_training_epoch
-from scripts.utils.history import empty_history
+from scripts.models.training import train_loop
 from scripts.utils.plotting import setup_matplotlib, show_or_close
 
 
@@ -70,54 +69,27 @@ def train_vae(
     beta=1.0, kl_warmup_epochs=0, checkpoint=None,
     lr_scheduler=None, lr_scheduler_factor=0.5, lr_scheduler_patience=5,
     grad_clip=None, early_stopping=None,
+    seed=None, config=None, data_fingerprint=None,
+    checkpoint_dir=None, checkpoint_prefix="flat_vae", keep_last=None,
+    resume_from=None,
 ):
-    vae.to(device)
-    optimizer = torch.optim.Adam(vae.parameters(), lr=lr)
-    scheduler = make_scheduler(lr_scheduler, optimizer, lr_scheduler_factor, lr_scheduler_patience)
+    """Flat-VAE training: the shared loop with this model's loss and evaluator (3.3.1).
 
-    history = empty_history()
-    # Best-weights tracking (2.7) and the stop decision (2.8) live in one tracker:
-    # the epoch early stopping would keep is the epoch whose weights are saved.
-    stopper = early_stopping if early_stopping is not None else EarlyStopping(patience=0)
-
-    for epoch in range(1, epochs + 1):
-        epoch_beta = beta_for_epoch(epoch, beta, kl_warmup_epochs)
-        train_loss, train_recon, train_kl = run_training_epoch(
-            vae, train_loader, optimizer, device, vae_loss, epoch_beta, grad_clip
-        )
-
-        history["epoch"].append(epoch)
-        history["beta"].append(epoch_beta)
-        history["lr"].append(optimizer.param_groups[0]["lr"])
-        history["train_loss"].append(train_loss)
-        history["train_recon"].append(train_recon)
-        history["train_kl"].append(train_kl)
-
-        if val_loader:
-            val_loss, val_recon, val_kl = evaluate_vae(vae, val_loader, device, epoch_beta)
-            history["val_loss"].append(val_loss)
-            history["val_recon"].append(val_recon)
-            history["val_kl"].append(val_kl)
-            print(f"Epoch {epoch:3d} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
-            monitor = val_loss
-        else:
-            print(f"Epoch {epoch:3d} | Train Loss: {train_loss:.4f}")
-            monitor = train_loss
-
-        stopper.update(monitor, epoch, vae)
-        if scheduler is not None:
-            scheduler.step(monitor)
-        if stopper.should_stop:
-            print(f"Early stopping at epoch {epoch}; best was epoch {stopper.best_epoch} (2.8).")
-            break
-
-    if checkpoint is not None:
-        checkpoint["best_state"] = stopper.best_state
-        checkpoint["best_epoch"] = stopper.best_epoch
-        checkpoint["best_metric"] = stopper.best
-        checkpoint["final_epoch"] = history["epoch"][-1]
-
-    return history
+    The loop itself lives in `training.train_loop`; this wrapper exists only to
+    bind `vae_loss`/`evaluate_vae`, so the flat VAE and the LSTM-VAE cannot drift
+    in anneal order, grad clipping, early stopping, checkpointing or resume.
+    """
+    return train_loop(
+        vae, train_loader, val_loader,
+        epochs=epochs, lr=lr, device=device,
+        loss_fn=vae_loss, evaluate_fn=evaluate_vae,
+        beta=beta, kl_warmup_epochs=kl_warmup_epochs, checkpoint=checkpoint,
+        lr_scheduler=lr_scheduler, lr_scheduler_factor=lr_scheduler_factor,
+        lr_scheduler_patience=lr_scheduler_patience, grad_clip=grad_clip,
+        early_stopping=early_stopping, seed=seed, config=config,
+        data_fingerprint=data_fingerprint, checkpoint_dir=checkpoint_dir,
+        checkpoint_prefix=checkpoint_prefix, keep_last=keep_last, resume_from=resume_from,
+    )
 
 
 def evaluate_vae(vae, loader, device, beta=1.0):

@@ -38,6 +38,18 @@ STANDALONE_VAL_SPLIT = CONFIG["val_split"]
 STANDALONE_TEST_SPLIT = CONFIG["test_split"]
 
 
+def sorted_rows(tensor):
+    """The rows of `tensor` in a canonical order.
+
+    The train loader shuffles, so the row order a captured loader yields is a
+    function of the RNG, not of the data. Comparing two runs' raw tensors tests the
+    shuffle rather than the split; sorting by every column compares the row
+    *multiset*, which is what "these rows are the training set" actually means.
+    """
+    rows = tensor.numpy()
+    return rows[np.lexsort(rows.T[::-1])]
+
+
 @pytest.fixture
 def features():
     """A (60, 4) feature block. Deterministic, so the split is reproducible."""
@@ -464,7 +476,8 @@ def test_step_flat_vae_train_data_is_invariant_to_val_perturbation(
     perturbed, _, _ = perturb_val_rows_only(features)
     b, _, _ = run_step_flat_vae(tmp_path / "b", perturbed, annotations_csv)
 
-    assert torch.equal(a["train"], b["train"]), "val rows leaked into the training tensors"
+    assert np.array_equal(sorted_rows(a["train"]), sorted_rows(b["train"])), \
+        "val rows leaked into the training tensors"
     assert b["val"].max() > 1.0, "an out-of-range val sample must stay out of range, not be rescaled"
 
 
@@ -549,7 +562,8 @@ def test_step_flat_vae_train_data_is_invariant_to_test_perturbation(
     b, _, _ = run_step_flat_vae(tmp_path / "b", perturbed, annotations_csv, test_split=TEST_SPLIT)
 
     assert test_idx.size > 0, "the test split must be non-empty for this to mean anything"
-    assert torch.equal(a["train"], b["train"]), "test rows leaked into the training tensors"
+    assert np.array_equal(sorted_rows(a["train"]), sorted_rows(b["train"])), \
+        "test rows leaked into the training tensors"
     # Control: the perturbation was confined to test rows, so val is untouched.
     assert torch.equal(a["val"], b["val"])
 
@@ -776,7 +790,8 @@ def test_standalone_vae_train_data_is_val_invariant(monkeypatch, tmp_path, annot
     before = run_standalone_vae(monkeypatch, features, annotations_df)
     after = run_standalone_vae(monkeypatch, perturbed, annotations_df)
 
-    assert torch.equal(before[0]["train"], after[0]["train"]), "val rows leaked into the train tensors"
+    assert np.array_equal(sorted_rows(before[0]["train"]), sorted_rows(after[0]["train"])), \
+        "val rows leaked into the train tensors"
     assert np.array_equal(before[1], after[1]) and np.array_equal(before[2], after[2])
 
 

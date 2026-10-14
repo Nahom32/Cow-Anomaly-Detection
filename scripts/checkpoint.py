@@ -308,3 +308,64 @@ def record_and_prune_checkpoints(*, manifest, directory, prefix, keep_last, fina
                 manifest.record_checkpoint(f"{prefix}_{role}", path, role=role, step=step)
     keep = [path for path in (final, best) if path is not None]
     return prune_checkpoint_dir(directory, prefix, keep_last=keep_last, keep=keep)
+
+
+# ── Resume (3.3.2) ────────────────────────────────────────────────────
+
+
+def list_epoch_checkpoints(directory, prefix):
+    """`(epoch, path)` for every epoch checkpoint of `prefix`, ascending by epoch.
+
+    `directory` is scanned by filename, so an interrupted run's checkpoints can be
+    ordered without loading any of them; only the names the retention policy
+    recognises (`{prefix}_epoch_NNNN.pth`) are returned.
+    """
+    pattern = f"{prefix}_epoch_*.pth"
+    if not os.path.isdir(directory):
+        return []
+    found = []
+    for name in sorted(os.listdir(directory)):
+        if not fnmatch.fnmatch(name, pattern):
+            continue
+        epoch = parse_epoch_checkpoint(name)
+        if epoch is not None:
+            found.append((epoch, os.path.join(directory, name)))
+    return sorted(found)
+
+
+def latest_epoch_checkpoint(directory, prefix, config=None):
+    """The checkpoint to resume `prefix` from, or None (3.3.2).
+
+    Returns the highest-epoch checkpoint. When `config` is given, checkpoints
+    whose recorded config hash differs are skipped: continuing an interrupted run
+    under a changed config would silently mix two experiments' weights, so the
+    caller should fall back to a fresh start rather than trust the file. A
+    mismatch is reported because the alternative — a silent fresh start — looks
+    identical to a resume that found nothing.
+    """
+    candidates = list_epoch_checkpoints(directory, prefix)
+    for _epoch, path in reversed(candidates):
+        if config is None:
+            return path
+        recorded = load_checkpoint(path, map_location="cpu").get("config")
+        if recorded is not None and hash_json(recorded) == hash_json(config):
+            return path
+    if config is not None and candidates:
+        print(
+            f"  {len(candidates)} epoch checkpoint(s) for {prefix!r} exist but none match the "
+            "current config — starting fresh (3.3.2)"
+        )
+    return None
+
+
+def clear_epoch_checkpoints(directory, prefix):
+    """Delete every epoch checkpoint of `prefix` (a fresh run must not mix with a stale one).
+
+    A fresh run starts at epoch 1 and would otherwise leave a previous run's
+    higher-numbered epochs on disk, which retention would then treat as the
+    newest and keep while deleting the current run's early epochs.
+    """
+    removed = [path for _, path in list_epoch_checkpoints(directory, prefix)]
+    for path in removed:
+        os.remove(path)
+    return removed

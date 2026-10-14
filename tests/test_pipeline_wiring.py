@@ -7,6 +7,7 @@ is the one test that skips when those packages are absent.
 """
 
 import inspect
+import os
 import subprocess
 import sys
 
@@ -234,6 +235,92 @@ def test_standalone_pipelines_checksum_and_prune_their_checkpoints(module):
     src = source_of(mod.main)
     assert "record_and_prune_checkpoints(" in src
     assert '["checkpoint_keep_last"]' in src
+
+
+def test_vae_stages_resume_from_their_last_epoch_checkpoint():
+    """3.3.2: a crashed step must continue at its next epoch, not epoch 1."""
+    for stage in (step_flat_vae, step_lstm_vae):
+        src = source_of(stage)
+        assert "latest_epoch_checkpoint(" in src, f"{stage.__name__} does not look for a resume point"
+        assert "resume_from=resume_from" in src, f"{stage.__name__} drops the resume point"
+        assert "resume" in inspect.signature(stage).parameters, f"{stage.__name__} cannot be forced fresh"
+
+
+def test_yolo_step_resumes_from_the_rolling_last_checkpoint():
+    from scripts.run_full_pipeline import step_train_yolo
+
+    src = source_of(step_train_yolo)
+    assert "yolo_resume_point(" in src
+    assert "resume_from=resume_from" in src
+    assert "resume" in inspect.signature(step_train_yolo).parameters
+
+
+def test_yolo_resume_point_rejects_a_run_from_another_config(tmp_path, monkeypatch):
+    """A stale `last.pt` from a different config must not be continued (3.3.2)."""
+    import scripts.run_full_pipeline as pipeline
+    from scripts.config import CONFIG
+
+    weights = tmp_path / "runs" / "detect" / "cow_detector" / "yolo26n_cbvd" / "weights"
+    weights.mkdir(parents=True)
+    last_pt = weights / "last.pt"
+    last_pt.write_bytes(b"rolling")
+    args = weights.parent / "args.yaml"
+
+    monkeypatch.chdir(tmp_path)
+    config = {**CONFIG}
+    data_yaml = str(tmp_path / "data.yaml")
+
+    args.write_text(f"epochs: {CONFIG['yolo']['epochs']}\nseed: {CONFIG['random_seed']}\ndata: {data_yaml}\n")
+    assert os.path.realpath(pipeline.yolo_resume_point(data_yaml, config)) == os.path.realpath(last_pt)
+
+    args.write_text(f"epochs: {CONFIG['yolo']['epochs']}\nseed: {CONFIG['random_seed'] + 1}\ndata: {data_yaml}\n")
+    assert pipeline.yolo_resume_point(data_yaml, config) is None
+
+    args.unlink()
+    assert pipeline.yolo_resume_point(data_yaml, config) is None, "an unverifiable run must not be resumed"
+
+
+def test_find_last_pt_prefers_the_run_directory(tmp_path, monkeypatch):
+    from scripts.run_full_pipeline import find_last_pt
+
+    weights = tmp_path / "runs" / "detect" / "cow_detector" / "yolo26n_cbvd" / "weights"
+    weights.mkdir(parents=True)
+    (weights / "last.pt").write_bytes(b"rolling")
+    monkeypatch.chdir(tmp_path)
+
+    assert os.path.realpath(find_last_pt()) == os.path.realpath(weights / "last.pt")
+
+
+def test_train_yolo_resume_lets_ultralytics_restore_its_own_args():
+    """On resume the checkpoint's args win; re-passing our config could conflict."""
+    from scripts.models.train_yolo_n import train_yolo
+
+    src = source_of(train_yolo)
+    assert "resume_from" in inspect.signature(train_yolo).parameters
+    assert "train(resume=True)" in src
+    assert ".train(data=data_yaml" in src, "the fresh path must still pass the data yaml"
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["scripts.train_vae_pipeline", "scripts.train_lstm_vae_pipeline"],
+)
+def test_standalone_pipelines_resume(module):
+    mod = __import__(module, fromlist=["main"])
+    src = source_of(mod.main)
+    assert "latest_epoch_checkpoint(" in src
+    assert "resume_from=resume_from" in src
+    assert "resume" in inspect.signature(mod.main).parameters
+
+
+def test_vae_train_loaders_draw_from_the_global_rng():
+    """3.3.3: a private `generator` cannot be snapshotted, so a resume could not
+    reproduce the shuffle order the uninterrupted run saw."""
+    for stage in (step_flat_vae, step_lstm_vae):
+        assert "torch.Generator()" not in source_of(stage), f"{stage.__name__} seeds a private loader RNG"
+    for module in ["scripts.train_vae_pipeline", "scripts.train_lstm_vae_pipeline"]:
+        mod = __import__(module, fromlist=["main"])
+        assert "torch.Generator()" not in source_of(mod.main)
 
 
 def test_importing_the_orchestrator_does_not_pull_in_the_vision_stack():

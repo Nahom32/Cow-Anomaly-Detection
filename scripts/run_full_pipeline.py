@@ -11,7 +11,11 @@ import torch
 import yaml
 from torch.utils.data import DataLoader, Subset, SubsetRandomSampler, TensorDataset
 
-from scripts.checkpoint import record_and_prune_checkpoints
+from scripts.checkpoint import (
+    data_fingerprint,
+    latest_epoch_checkpoint,
+    record_and_prune_checkpoints,
+)
 from scripts.config import CONFIG
 from scripts.data.build_features import build_feature_dataset
 from scripts.data.create_yolo_dataset import create_yolo_dataset
@@ -100,6 +104,49 @@ def find_best_pt():
     return candidates[0] if candidates else None
 
 
+def find_last_pt():
+    """YOLO's rolling `last.pt` — the resume point for an interrupted run (3.3.2).
+
+    Ultralytics writes it every epoch, so it is what makes a 150-epoch run
+    interrupted at epoch 140 continue at 141 instead of restarting at 1.
+    """
+    for project_dir in ["runs/detect/cow_detector", "cow_detector"]:
+        exact = os.path.join(project_dir, "yolo26n_cbvd", "weights", "last.pt")
+        if os.path.isfile(exact):
+            return exact
+    candidates = glob.glob("runs/detect/**/last.pt", recursive=True)
+    if not candidates:
+        candidates = glob.glob("**/last.pt", recursive=True)
+    return candidates[0] if candidates else None
+
+
+def yolo_resume_point(data_yaml, config, last_pt=None):
+    """The `last.pt` to resume YOLO from, or None (3.3.2).
+
+    Ultralytics records the run's arguments in `args.yaml` beside `weights/`.
+    Continuing a run whose epochs, seed or data differ would silently train a
+    different experiment on the old run's optimiser state, so anything other than
+    an exact match — including a missing or unreadable args file — means start fresh.
+    """
+    last_pt = last_pt or find_last_pt()
+    if last_pt is None:
+        return None
+    args_path = os.path.join(os.path.dirname(os.path.dirname(last_pt)), "args.yaml")
+    try:
+        import yaml
+
+        with open(args_path) as handle:
+            args = yaml.safe_load(handle) or {}
+        matches = (
+            int(args.get("epochs", -1)) == int(config["yolo"]["epochs"])
+            and int(args.get("seed", -1)) == int(config["random_seed"])
+            and str(args.get("data", "")) == str(data_yaml)
+        )
+    except (OSError, ImportError, TypeError, ValueError, AttributeError):
+        return None
+    return last_pt if matches else None
+
+
 # ── Step runners ──────────────────────────────────────────────────────
 
 def step_download_dataset(output_dir, manifest=None):
@@ -166,11 +213,18 @@ def step_create_yaml(yolo_data_dir):
     return {"data_yaml": yaml_path}
 
 
-def step_train_yolo(data_yaml, output_dir, config, manifest=None):
+def step_train_yolo(data_yaml, output_dir, config, manifest=None, resume=True):
     print("\n" + "=" * 60)
     print("STEP 4: Training YOLO26n")
     print("=" * 60)
-    train_yolo26n(data_yaml=data_yaml, seed=config["random_seed"])
+    # Resume from Ultralytics' `last.pt` only when the interrupted run belongs to the
+    # current config (3.3.2): a fresh run with no prior checkpoint behaves as before,
+    # `--force` passes resume=False, and a mismatched config starts over rather than
+    # continuing a different experiment.
+    resume_from = yolo_resume_point(data_yaml, config) if resume else None
+    if resume_from is not None:
+        print(f"  resuming YOLO from {resume_from} (3.3.2)")
+    train_yolo26n(data_yaml=data_yaml, seed=config["random_seed"], resume_from=resume_from)
     yolo_weights = find_best_pt()
     if not yolo_weights:
         raise FileNotFoundError(
@@ -197,7 +251,7 @@ def step_feature_extractor(yolo_weights, device, layer_index=9):
     return feature_extractor, hook
 
 
-def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, output_dir, config, feature_cache=None, headless=None, manifest=None):
+def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, output_dir, config, feature_cache=None, headless=None, manifest=None, resume=True):
     print("\n" + "=" * 60)
     print("STEP 6: Training flat VAE")
     print("=" * 60)
@@ -237,10 +291,12 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     normalizer = MinMaxNormalizer().fit(features[train_idx])
     features_norm = normalizer.transform(features)
     X_train, X_val = features_norm[train_idx], features_norm[val_idx]
+    # No private `generator`: the loop snapshots and restores the *global* RNG so a
+    # resumed run reproduces the uninterrupted curve (3.3.3), and it can only do
+    # that for a shuffle drawn from the global stream.
     train_loader = DataLoader(
         TensorDataset(torch.tensor(X_train, dtype=torch.float32)),
         batch_size=config["vae_batch_size"], shuffle=True,
-        generator=torch.Generator().manual_seed(config["random_seed"]),
     )
     val_loader = DataLoader(
         TensorDataset(torch.tensor(X_val, dtype=torch.float32)),
@@ -249,6 +305,10 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
 
     vae = VAE(features.shape[1], hidden_dim=config["vae_hidden_dim"], latent_dim=config["vae_latent_dim"])
     checkpoint = {}
+    # Resume an interrupted step 6 from its newest epoch checkpoint rather than
+    # restarting at epoch 1 (3.3.2). `latest_epoch_checkpoint` returns None if the
+    # checkpoints were written under a different config, so a changed run retrains.
+    resume_from = latest_epoch_checkpoint(output_dir, "flat_vae", config=config) if resume else None
     history = train_vae(
         vae, train_loader, val_loader,
         epochs=config["vae_epochs"], lr=config["vae_lr"], device=device,
@@ -259,6 +319,10 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
         lr_scheduler_patience=config["vae_lr_scheduler_patience"],
         grad_clip=config["vae_grad_clip"],
         early_stopping=EarlyStopping(patience=config["vae_early_stopping_patience"]),
+        seed=config["random_seed"], config=config,
+        data_fingerprint=data_fingerprint(manifest=manifest),
+        checkpoint_dir=output_dir, checkpoint_prefix="flat_vae",
+        keep_last=config["checkpoint_keep_last"], resume_from=resume_from,
     )
 
     save_history(history, os.path.join(output_dir, "flat_vae_history.csv"))
@@ -335,7 +399,7 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     print("Flat VAE complete.")
 
 
-def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output_dir, config, feature_cache=None, manifest=None):
+def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output_dir, config, feature_cache=None, manifest=None, resume=True):
     print("\n" + "=" * 60)
     print("STEP 7: Training LSTM-VAE")
     print("=" * 60)
@@ -402,7 +466,7 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
         seed=config["random_seed"],
     )
 
-    train_loader = DataLoader(norm_dataset, batch_size=config["lstm_vae_batch_size"], sampler=SubsetRandomSampler(train_indices, generator=torch.Generator().manual_seed(config["random_seed"])))
+    train_loader = DataLoader(norm_dataset, batch_size=config["lstm_vae_batch_size"], sampler=SubsetRandomSampler(train_indices))
     # Validation is a full, ordered pass (2.9): a shuffled sampler made the val
     # batches differ every epoch, so `val_loss` depended on the draw as well as the
     # weights. `Subset` covers every val window exactly once, in split order.
@@ -442,6 +506,8 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
         )
     checkpoint = {}
 
+    # Resume an interrupted step 7 from its newest epoch checkpoint (3.3.2).
+    resume_from = latest_epoch_checkpoint(output_dir, "lstm_vae", config=config) if resume else None
     history = train_lstm_vae(
         vae, train_loader, val_loader,
         epochs=config["lstm_vae_epochs"], lr=config["lstm_vae_lr"], device=device,
@@ -452,6 +518,10 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
         lr_scheduler_patience=config["lstm_vae_lr_scheduler_patience"],
         grad_clip=config["lstm_vae_grad_clip"],
         early_stopping=EarlyStopping(patience=config["lstm_vae_early_stopping_patience"]),
+        seed=config["random_seed"], config=config,
+        data_fingerprint=data_fingerprint(manifest=manifest),
+        checkpoint_dir=output_dir, checkpoint_prefix="lstm_vae",
+        keep_last=config["checkpoint_keep_last"], resume_from=resume_from,
     )
 
     # Final-epoch weights keep the existing artifact's meaning; the best-val epoch
@@ -649,6 +719,9 @@ def main():
 
     state = load_state(output_dir)
     force_step = 1 if args.force else args.from_step
+    # `--force` means "start clean", so it also suppresses resume; every other run
+    # continues an interrupted step from its last checkpoint (3.3.2).
+    resume = not args.force
 
     # Reuse the manifest already in this output directory: its per-step config
     # hashes are what distinguish a resumable step from a stale one. A fresh
@@ -710,7 +783,7 @@ def main():
         state["yolo_weights"] = yolo_weights
         print(f"\n[SKIP] Step 4: YOLO training (found {yolo_weights})")
     else:
-        state.update(step_train_yolo(state["data_yaml"], output_dir, config, manifest=manifest))
+        state.update(step_train_yolo(state["data_yaml"], output_dir, config, manifest=manifest, resume=resume))
         state["last_step"] = 4
         save_state(output_dir, state)
         manifest.save()
@@ -739,7 +812,7 @@ def main():
         step_flat_vae(
             state["annotations_csv"], state["frames_dir"],
             feature_extractor, hook, device, output_dir, config,
-            feature_cache=feature_cache, headless=headless, manifest=manifest,
+            feature_cache=feature_cache, headless=headless, manifest=manifest, resume=resume,
         )
         state["last_step"] = 6
         save_state(output_dir, state)
@@ -752,7 +825,7 @@ def main():
         step_lstm_vae(
             state["annotations_csv"], state["frames_dir"],
             feature_extractor, device, output_dir, config,
-            feature_cache=feature_cache, manifest=manifest,
+            feature_cache=feature_cache, manifest=manifest, resume=resume,
         )
         state["last_step"] = 7
         save_state(output_dir, state)

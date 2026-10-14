@@ -5,7 +5,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
-from scripts.checkpoint import record_and_prune_checkpoints
+from scripts.checkpoint import data_fingerprint, latest_epoch_checkpoint, record_and_prune_checkpoints
 from scripts.config import CONFIG
 from scripts.data.build_features import build_feature_dataset
 from scripts.data.feature_cache import open_run_feature_cache
@@ -21,7 +21,7 @@ from scripts.utils.io import atomic_torch_save
 from scripts.utils.seeding import set_seed
 
 
-def main():
+def main(resume=True):
     YOLO_MODEL_PATH = "/content/drive/MyDrive/cow_detector26n_results/weights/best.pt"
     FRAMES_DIR = "/root/.cache/kagglehub/datasets/fandaoerji/cbvd-5cow-behavior-video-dataset/versions/11/rawframes_mini"
     ANNOTATIONS_CSV = "/root/.cache/kagglehub/datasets/fandaoerji/cbvd-5cow-behavior-video-dataset/versions/11/annotations/ava_train_v2.1.csv"
@@ -81,10 +81,11 @@ def main():
     normalizer = MinMaxNormalizer().fit(features[train_idx])
     features_norm = normalizer.transform(features)
     X_train, X_val = features_norm[train_idx], features_norm[val_idx]
+    # No private `generator`: the loop snapshots/restores the global RNG so an
+    # interrupted run resumes to the same curve (3.3.3).
     train_loader = DataLoader(
         TensorDataset(torch.tensor(X_train, dtype=torch.float32)),
         batch_size=BATCH_SIZE, shuffle=True,
-        generator=torch.Generator().manual_seed(SEED),
     )
     val_loader = DataLoader(
         TensorDataset(torch.tensor(X_val, dtype=torch.float32)),
@@ -96,6 +97,8 @@ def main():
 
     print("Starting VAE training...")
     checkpoint = {}
+    # Continue an interrupted standalone run from its last epoch checkpoint (3.3.2).
+    resume_from = latest_epoch_checkpoint(OUTPUT_DIR, "vae_anomaly", config=config) if resume else None
     history = train_vae(
         vae, train_loader, val_loader, epochs=EPOCHS, lr=LR, device=DEVICE,
         beta=CONFIG["vae_beta"], kl_warmup_epochs=CONFIG["vae_kl_warmup_epochs"],
@@ -105,6 +108,9 @@ def main():
         lr_scheduler_patience=CONFIG["vae_lr_scheduler_patience"],
         grad_clip=CONFIG["vae_grad_clip"],
         early_stopping=EarlyStopping(patience=CONFIG["vae_early_stopping_patience"]),
+        seed=SEED, config=config, data_fingerprint=data_fingerprint(manifest=manifest),
+        checkpoint_dir=OUTPUT_DIR, checkpoint_prefix="vae_anomaly",
+        keep_last=CONFIG["checkpoint_keep_last"], resume_from=resume_from,
     )
 
     save_history(history, os.path.join(OUTPUT_DIR, "vae_training_history.csv"))

@@ -5,7 +5,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Subset, SubsetRandomSampler
 
-from scripts.checkpoint import record_and_prune_checkpoints
+from scripts.checkpoint import data_fingerprint, latest_epoch_checkpoint, record_and_prune_checkpoints
 from scripts.config import CONFIG
 from scripts.data.feature_cache import open_run_feature_cache
 from scripts.data.normalize import MinMaxNormalizer
@@ -22,7 +22,7 @@ from scripts.utils.io import atomic_torch_save
 from scripts.utils.seeding import set_seed
 
 
-def main():
+def main(resume=True):
     YOLO_MODEL_PATH = "/content/drive/MyDrive/cow_detector26n_results/weights/best.pt"
     FRAMES_DIR = "/root/.cache/kagglehub/datasets/fandaoerji/cbvd-5cow-behavior-video-dataset/versions/11/rawframes_mini"
     ANNOTATIONS_CSV = "/root/.cache/kagglehub/datasets/fandaoerji/cbvd-5cow-behavior-video-dataset/versions/11/annotations/ava_train_v2.1.csv"
@@ -108,8 +108,9 @@ def main():
         seed=SEED,
     )
 
-    train_generator = torch.Generator().manual_seed(SEED)
-    train_loader = DataLoader(norm_dataset, batch_size=BATCH_SIZE, sampler=SubsetRandomSampler(train_indices, generator=train_generator))
+    # No private generator on the train sampler: the shared loop restores the
+    # global RNG on resume so the sampling order matches the uninterrupted run (3.3.3).
+    train_loader = DataLoader(norm_dataset, batch_size=BATCH_SIZE, sampler=SubsetRandomSampler(train_indices))
     # Full, ordered validation pass (2.9); see step_lstm_vae.
     val_loader = DataLoader(Subset(norm_dataset, val_indices), batch_size=BATCH_SIZE, shuffle=False)
 
@@ -137,6 +138,8 @@ def main():
 
     print("Starting LSTM-VAE training...")
     checkpoint = {}
+    # Continue an interrupted standalone run from its last epoch checkpoint (3.3.2).
+    resume_from = latest_epoch_checkpoint(OUTPUT_DIR, "lstm_vae_anomaly", config=config) if resume else None
     history = train_lstm_vae(
         vae, train_loader, val_loader, epochs=EPOCHS, lr=LR, device=DEVICE,
         beta=CONFIG["lstm_vae_beta"], kl_warmup_epochs=CONFIG["lstm_vae_kl_warmup_epochs"],
@@ -146,6 +149,9 @@ def main():
         lr_scheduler_patience=CONFIG["lstm_vae_lr_scheduler_patience"],
         grad_clip=CONFIG["lstm_vae_grad_clip"],
         early_stopping=EarlyStopping(patience=CONFIG["lstm_vae_early_stopping_patience"]),
+        seed=SEED, config=config, data_fingerprint=data_fingerprint(manifest=manifest),
+        checkpoint_dir=OUTPUT_DIR, checkpoint_prefix="lstm_vae_anomaly",
+        keep_last=CONFIG["checkpoint_keep_last"], resume_from=resume_from,
     )
 
     lstm_final = os.path.join(OUTPUT_DIR, "lstm_vae_anomaly.pth")

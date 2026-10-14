@@ -391,14 +391,14 @@ produced a given number.
 
 ### 3.3 Shared API & resume
 
-- [ ] **3.3.1** One `save_checkpoint` / `load_checkpoint` / `resume_training` implementation shared
+- [x] **3.3.1** One `save_checkpoint` / `load_checkpoint` / `resume_training` implementation shared
       by every training loop. Today there are two bespoke, near-duplicate loops
       (`vae.py:54-107`, `lstm_vae.py:53-86`) with divergent accumulator conventions (see 2.2).
-- [ ] **3.3.2** **Resume interrupted training mid-run.** `--from-step` currently restarts an epoch
+- [x] **3.3.2** **Resume interrupted training mid-run.** `--from-step` currently restarts an epoch
       from zero; a 150-epoch YOLO run interrupted at epoch 140 begins again at epoch 1. The existing
       `runs/detect/cow_detector/yolo26n_cbvd/results.csv` stopped at 126 epochs via `patience=50`,
       which is early stopping, not interruption — do not confuse the two.
-- [ ] **3.3.3** Resume must reproduce the uninterrupted loss curve. Test this explicitly (3.6.2).
+- [x] **3.3.3** Resume must reproduce the uninterrupted loss curve. Test this explicitly (3.6.2).
 
 ### 3.4 Checkpoints for non-neural models
 
