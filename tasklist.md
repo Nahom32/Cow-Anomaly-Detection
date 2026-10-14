@@ -405,7 +405,7 @@ produced a given number.
 - [x] **3.4.1** Mahalanobis needs `mu`, `Sigma`, **and the covariance-estimator name**
       (diagonal / full / regularized / Ledoit-Wolf / PCA+Mahalanobis) — the estimator identity is
       the experimental variable and must not be inferable from array shape.
-- [ ] **3.4.2** Euclidean needs `mu`; PCA needs components + explained variance; Isolation Forest
+- [x] **3.4.2** Euclidean needs `mu`; PCA needs components + explained variance; Isolation Forest
       needs the fitted estimator; Markov needs the transition matrix `P(b_t|b_{t-1})`.
       These are fitted artifacts, not torch modules — wrap them in the same checkpoint envelope or
       Phase 4 cannot resume or audit them.

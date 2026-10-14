@@ -41,6 +41,24 @@ _REQUIRED_FIELDS = (
 _REGISTRY = {}
 
 
+def as_matrix(features):
+    """Coerce to a float64 `(n_samples, n_features)` matrix, loudly.
+
+    A 1-D input is a single sample; anything else that is not 2-D is a bug in the
+    caller, not something to reshape around.
+    """
+    import numpy as np
+
+    matrix = np.asarray(features, dtype=np.float64)
+    if matrix.ndim == 1:
+        matrix = matrix.reshape(1, -1)
+    if matrix.ndim != 2:
+        raise ValueError(f"expected a (n_samples, n_features) array, got shape {matrix.shape}")
+    if matrix.shape[1] == 0:
+        raise ValueError("feature matrix has zero columns")
+    return matrix
+
+
 def register(cls):
     """Register a `FittedModel` subclass so `load_detector` can dispatch on `kind`."""
     if not cls.kind:

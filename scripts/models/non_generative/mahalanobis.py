@@ -16,7 +16,7 @@ experiment it came from, which is exactly what 3.4.1 forbids.
 
 import numpy as np
 
-from scripts.models.non_generative.base import FittedModel, register
+from scripts.models.non_generative.base import FittedModel, as_matrix, register
 
 ESTIMATORS = ("diagonal", "full", "regularized", "ledoit_wolf", "pca_mahalanobis")
 DEFAULT_REGULARIZATION = 1e-6
@@ -43,7 +43,7 @@ class MahalanobisDetector(FittedModel):
         self.pca_mean_ = None
 
     def fit(self, features):
-        matrix = _as_matrix(features)
+        matrix = as_matrix(features)
         if matrix.shape[0] < 2:
             raise ValueError("MahalanobisDetector.fit needs at least 2 rows; nothing to estimate Sigma from")
         if self.estimator == "pca_mahalanobis":
@@ -61,7 +61,7 @@ class MahalanobisDetector(FittedModel):
         return self
 
     def score(self, features):
-        matrix = _as_matrix(features)
+        matrix = as_matrix(features)
         self._require_fitted()
         if self.estimator == "pca_mahalanobis":
             matrix = (matrix - self.pca_mean_) @ self.components_.T
@@ -139,16 +139,6 @@ class MahalanobisDetector(FittedModel):
                 f"{self.estimator} estimator requires covariance shape {expected_covariance}, got {covariance.shape}"
             )
 
-
-def _as_matrix(features):
-    matrix = np.asarray(features, dtype=np.float64)
-    if matrix.ndim == 1:
-        matrix = matrix.reshape(1, -1)
-    if matrix.ndim != 2:
-        raise ValueError(f"expected a (n_samples, n_features) array, got shape {matrix.shape}")
-    if matrix.shape[1] == 0:
-        raise ValueError("feature matrix has zero columns")
-    return matrix
 
 
 def _fit_covariance(matrix, estimator, regularization):
