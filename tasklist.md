@@ -370,24 +370,23 @@ produced a given number.
 
 ### 3.1 Checkpoint schema
 
-- [ ] **3.1.1** Define **one** checkpoint format for all models, carrying at minimum:
+- [x] **3.1.1** Define **one** checkpoint format for all models, carrying at minimum:
       `model_state`, `optimizer_state`, `scheduler_state`, `epoch`, `best_metric`,
       `best_metric_epoch`, resolved `config`, `seed`, RNG states (torch/numpy/python), `git_sha`,
       `data_fingerprint`, and a `format_version`.
-- [ ] **3.1.2** Migrate the two existing artifacts (`flat_vae_model.pth` = 111,424 params,
+- [x] **3.1.2** Migrate the two existing artifacts (`flat_vae_model.pth` = 111,424 params,
       `lstm_vae_model.pth` = 321,856 params). They hold weights only, so they cannot be resumed —
-      decide explicitly whether to backfill or archive them. **Note: both were trained under the
-      leaked split, so they are scientifically void regardless and should be archived, not
-      backfilled.**
+      archived (not backfilled) under `pipeline_output/legacy_checkpoints/` with an archive note;
+      both are scientifically void under the leaked split.
 
 ### 3.2 Write safety & retention
 
-- [ ] **3.2.1** **Atomic writes** — write to `*.tmp`, fsync, then `os.replace()`. Today a crash
+- [x] **3.2.1** **Atomic writes** — write to `*.tmp`, fsync, then `os.replace()`. Today a crash
       mid-`torch.save` leaves a truncated `.pth` that `is_step_done` (`run_full_pipeline.py:248-263`)
       still reports as a completed step.
-- [ ] **3.2.2** Retention policy: keep best + last-N (N≈3) + final. Disk cost becomes material once
+- [x] **3.2.2** Retention policy: keep best + last-N (N≈3) + final. Disk cost becomes material once
       Phase 4 runs ~12 models x 5 seeds x multiple splits.
-- [ ] **3.2.3** Checksum each checkpoint and record it in the manifest (0.10) so silent corruption
+- [x] **3.2.3** Checksum each checkpoint and record it in the manifest (0.10) so silent corruption
       or substitution is detectable.
 
 ### 3.3 Shared API & resume
