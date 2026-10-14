@@ -108,4 +108,11 @@ CONFIG = {
     "lstm_vae_match_flat_parameters": False,
     "seq_len": 16,
     "seq_stride": 8,
+
+    # Checkpoint retention (3.2.2). Every run keeps its best-val and final
+    # checkpoints plus the `keep_last` most recent per-epoch ones; older epoch
+    # checkpoints are deleted after each stage. Disk cost becomes material once
+    # Phase 4 runs the full model x seed x split grid, and a resume only ever
+    # needs the most recent epochs plus the best weights.
+    "checkpoint_keep_last": 3,
 }

@@ -217,6 +217,25 @@ def test_standalone_pipelines_draw_the_canonical_split_from_config(module):
     assert "train_test_split(" not in src
 
 
+def test_vae_stages_checksum_and_prune_their_checkpoints():
+    """3.2.2/3.2.3: a stage must bind each checkpoint by hash and bound disk use."""
+    for stage in (step_flat_vae, step_lstm_vae):
+        src = source_of(stage)
+        assert "record_and_prune_checkpoints(" in src, f"{stage.__name__} does not record/prune checkpoints"
+        assert '["checkpoint_keep_last"]' in src, f"{stage.__name__} ignores the retention window"
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["scripts.train_vae_pipeline", "scripts.train_lstm_vae_pipeline"],
+)
+def test_standalone_pipelines_checksum_and_prune_their_checkpoints(module):
+    mod = __import__(module, fromlist=["main"])
+    src = source_of(mod.main)
+    assert "record_and_prune_checkpoints(" in src
+    assert '["checkpoint_keep_last"]' in src
+
+
 def test_importing_the_orchestrator_does_not_pull_in_the_vision_stack():
     """Keeps the CPU-only promise in AGENTS.md true for the whole pipeline."""
     code = (

@@ -37,7 +37,6 @@ def detect_legacy(path):
 
 
 def archive_path(src, archive_root):
-    rel = os.path.relpath(src, start=os.path.dirname(src) or ".")
     ts = datetime.now().strftime("%Y%m%dT%H%M%S")
     dest_dir = os.path.join(archive_root, "legacy_checkpoints", ts)
     os.makedirs(dest_dir, exist_ok=True)

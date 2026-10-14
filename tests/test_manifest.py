@@ -150,3 +150,64 @@ def test_previous_run_is_carried_into_the_new_manifest(tmp_path):
     prior = RunManifest.load(tmp_path)
     second.record("previous_run", {"created_at": prior.data["created_at"], "config_hash": prior.config_hash})
     assert second.data["previous_run"]["config_hash"] != second.config_hash
+
+
+def test_record_checkpoint_binds_hash_and_metadata(manifest, tmp_path):
+    p = tmp_path / "m.pth"
+    p.write_bytes(b"weights")
+    manifest.record_checkpoint("m_final", str(p), role="final", step=6)
+    entry = manifest.data["checkpoints"]["m_final"]
+    assert entry["sha256"] == sha256_file(str(p))
+    assert entry["bytes"] == len(b"weights")
+    assert entry["role"] == "final" and entry["step"] == 6
+    assert os.path.isabs(entry["path"])
+
+
+def test_record_checkpoint_marks_a_missing_file(manifest, tmp_path):
+    manifest.record_checkpoint("gone", str(tmp_path / "nope.pth"))
+    entry = manifest.data["checkpoints"]["gone"]
+    assert entry["missing"] is True
+    assert "sha256" not in entry
+
+
+def test_verify_checkpoint_accepts_an_intact_file(manifest, tmp_path):
+    p = tmp_path / "m.pth"
+    p.write_bytes(b"weights")
+    manifest.record_checkpoint("m_final", str(p))
+    assert manifest.verify_checkpoint("m_final")["sha256"] == sha256_file(str(p))
+
+
+def test_verify_checkpoint_detects_corruption(manifest, tmp_path):
+    p = tmp_path / "m.pth"
+    p.write_bytes(b"weights")
+    manifest.record_checkpoint("m_final", str(p))
+    p.write_bytes(b"tampered!")
+    with pytest.raises(RuntimeError, match="corrupted or replaced"):
+        manifest.verify_checkpoint("m_final")
+
+
+def test_verify_checkpoint_detects_a_swapped_file(manifest, tmp_path):
+    original = tmp_path / "m.pth"
+    original.write_bytes(b"weights")
+    substitute = tmp_path / "other.pth"
+    substitute.write_bytes(b"weights")
+    manifest.record_checkpoint("m_final", str(original))
+    # Byte-identical copy verifies; a different file with the same name does not.
+    assert manifest.verify_checkpoint("m_final", path=str(substitute))
+    substitute.write_bytes(b"different")
+    with pytest.raises(RuntimeError, match="corrupted or replaced"):
+        manifest.verify_checkpoint("m_final", path=str(substitute))
+
+
+def test_verify_checkpoint_rejects_an_unrecorded_name(manifest):
+    with pytest.raises(KeyError, match="no recorded checkpoint"):
+        manifest.verify_checkpoint("nope")
+
+
+def test_verify_checkpoint_detects_a_deleted_file(manifest, tmp_path):
+    p = tmp_path / "m.pth"
+    p.write_bytes(b"weights")
+    manifest.record_checkpoint("m_final", str(p))
+    p.unlink()
+    with pytest.raises(FileNotFoundError):
+        manifest.verify_checkpoint("m_final")

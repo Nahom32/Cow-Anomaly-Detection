@@ -348,6 +348,7 @@ def _pipeline_config(**overrides):
         "lstm_vae_lr_scheduler_patience": 5, "lstm_vae_grad_clip": None,
         "lstm_vae_early_stopping_patience": 0,
         "lstm_vae_match_flat_parameters": False,
+        "checkpoint_keep_last": 3,
     }
     config.update(overrides)
     return config

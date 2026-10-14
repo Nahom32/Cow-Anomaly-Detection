@@ -5,6 +5,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Subset, SubsetRandomSampler
 
+from scripts.checkpoint import record_and_prune_checkpoints
 from scripts.config import CONFIG
 from scripts.data.feature_cache import open_run_feature_cache
 from scripts.data.normalize import MinMaxNormalizer
@@ -147,11 +148,20 @@ def main():
         early_stopping=EarlyStopping(patience=CONFIG["lstm_vae_early_stopping_patience"]),
     )
 
-    atomic_torch_save(os.path.join(OUTPUT_DIR, "lstm_vae_anomaly.pth"), vae.state_dict())
-    if checkpoint.get("best_state") is not None:
-        atomic_torch_save(os.path.join(OUTPUT_DIR, "lstm_vae_anomaly_best.pth"), checkpoint["best_state"])
+    lstm_final = os.path.join(OUTPUT_DIR, "lstm_vae_anomaly.pth")
+    lstm_best = os.path.join(OUTPUT_DIR, "lstm_vae_anomaly_best.pth")
+    atomic_torch_save(lstm_final, vae.state_dict())
+    wrote_best = checkpoint.get("best_state") is not None
+    if wrote_best:
+        atomic_torch_save(lstm_best, checkpoint["best_state"])
         print(f"Best val epoch {checkpoint['best_epoch']} ({checkpoint['best_metric']:.4f}); "
               f"final epoch {checkpoint['final_epoch']}. Scores use the final checkpoint (2.7).")
+    # Checksum what was written and enforce the retention window (3.2.2, 3.2.3).
+    record_and_prune_checkpoints(
+        manifest=manifest, directory=OUTPUT_DIR, prefix="lstm_vae_anomaly",
+        keep_last=CONFIG["checkpoint_keep_last"],
+        final=lstm_final, best=lstm_best if wrote_best else None, step="lstm_vae",
+    )
     save_history(history, os.path.join(OUTPUT_DIR, "lstm_vae_training_history.csv"))
     np.save(os.path.join(OUTPUT_DIR, "feature_min.npy"), normalizer.min_)
     np.save(os.path.join(OUTPUT_DIR, "feature_max.npy"), normalizer.max_)

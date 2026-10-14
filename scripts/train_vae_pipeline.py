@@ -5,6 +5,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
+from scripts.checkpoint import record_and_prune_checkpoints
 from scripts.config import CONFIG
 from scripts.data.build_features import build_feature_dataset
 from scripts.data.feature_cache import open_run_feature_cache
@@ -107,11 +108,21 @@ def main():
     )
 
     save_history(history, os.path.join(OUTPUT_DIR, "vae_training_history.csv"))
-    atomic_torch_save(os.path.join(OUTPUT_DIR, "vae_anomaly_model.pth"), vae.state_dict())
-    if checkpoint.get("best_state") is not None:
-        atomic_torch_save(os.path.join(OUTPUT_DIR, "vae_anomaly_best.pth"), checkpoint["best_state"])
+    final_path = os.path.join(OUTPUT_DIR, "vae_anomaly_model.pth")
+    best_path = os.path.join(OUTPUT_DIR, "vae_anomaly_best.pth")
+    atomic_torch_save(final_path, vae.state_dict())
+    wrote_best = checkpoint.get("best_state") is not None
+    if wrote_best:
+        atomic_torch_save(best_path, checkpoint["best_state"])
         print(f"Best val epoch {checkpoint['best_epoch']} ({checkpoint['best_metric']:.4f}); "
               f"final epoch {checkpoint['final_epoch']}. Scores use the final checkpoint (2.7).")
+    # Checksum what was written and drop epoch checkpoints past the retention
+    # window (3.2.2, 3.2.3).
+    record_and_prune_checkpoints(
+        manifest=manifest, directory=OUTPUT_DIR, prefix="vae_anomaly",
+        keep_last=CONFIG["checkpoint_keep_last"],
+        final=final_path, best=best_path if wrote_best else None, step="flat_vae",
+    )
     np.save(os.path.join(OUTPUT_DIR, "feature_min.npy"), normalizer.min_)
     np.save(os.path.join(OUTPUT_DIR, "feature_max.npy"), normalizer.max_)
 

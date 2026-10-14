@@ -11,6 +11,7 @@ import torch
 import yaml
 from torch.utils.data import DataLoader, Subset, SubsetRandomSampler, TensorDataset
 
+from scripts.checkpoint import record_and_prune_checkpoints
 from scripts.config import CONFIG
 from scripts.data.build_features import build_feature_dataset
 from scripts.data.create_yolo_dataset import create_yolo_dataset
@@ -264,8 +265,18 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
     # Both checkpoints are written and which one the scores below come from is
     # recorded. `flat_vae_model.pth` stays the final-epoch weights so existing
     # artifacts keep their meaning; `flat_vae_best.pth` is the best-val epoch (2.7).
-    atomic_torch_save(os.path.join(output_dir, "flat_vae_model.pth"), vae.state_dict())
-    _save_best_checkpoint(checkpoint, os.path.join(output_dir, "flat_vae_best.pth"), "flat VAE")
+    flat_final = os.path.join(output_dir, "flat_vae_model.pth")
+    flat_best = os.path.join(output_dir, "flat_vae_best.pth")
+    atomic_torch_save(flat_final, vae.state_dict())
+    wrote_best = _save_best_checkpoint(checkpoint, flat_best, "flat VAE")
+    # Checksum both and enforce retention (3.2.2, 3.2.3): the manifest binds each
+    # checkpoint to its content, and any epoch checkpoints beyond the last
+    # `checkpoint_keep_last` are dropped so a Phase 4 grid cannot fill the disk.
+    record_and_prune_checkpoints(
+        manifest=manifest, directory=output_dir, prefix="flat_vae",
+        keep_last=config["checkpoint_keep_last"],
+        final=flat_final, best=flat_best if wrote_best else None, step=6,
+    )
     print(f"  flat VAE parameters: {count_parameters(vae):,} (recorded for the 2.11 comparison)")
     np.save(os.path.join(output_dir, "flat_vae_feature_min.npy"), normalizer.min_)
     np.save(os.path.join(output_dir, "flat_vae_feature_max.npy"), normalizer.max_)
@@ -445,8 +456,17 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
 
     # Final-epoch weights keep the existing artifact's meaning; the best-val epoch
     # is written alongside and named in the manifest (2.7).
-    atomic_torch_save(os.path.join(output_dir, "lstm_vae_model.pth"), vae.state_dict())
-    _save_best_checkpoint(checkpoint, os.path.join(output_dir, "lstm_vae_best.pth"), "LSTM-VAE")
+    lstm_final = os.path.join(output_dir, "lstm_vae_model.pth")
+    lstm_best = os.path.join(output_dir, "lstm_vae_best.pth")
+    atomic_torch_save(lstm_final, vae.state_dict())
+    wrote_best = _save_best_checkpoint(checkpoint, lstm_best, "LSTM-VAE")
+    # Same checksum + retention treatment as the flat VAE (3.2.2, 3.2.3), scoped
+    # to the `lstm_vae` prefix so the two models cannot prune each other.
+    record_and_prune_checkpoints(
+        manifest=manifest, directory=output_dir, prefix="lstm_vae",
+        keep_last=config["checkpoint_keep_last"],
+        final=lstm_final, best=lstm_best if wrote_best else None, step=7,
+    )
     # 2.11: the LSTM-VAE is ~2.9x the flat VAE, so an unqualified win would be a
     # size win. The ratio is printed and recorded next to the flat count, and the
     # width actually used is recorded so a matched run is distinguishable from a

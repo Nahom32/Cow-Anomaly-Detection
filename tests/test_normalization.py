@@ -329,6 +329,8 @@ def config(**overrides):
         "lstm_vae_grad_clip": None,
         "lstm_vae_early_stopping_patience": 0,
         "lstm_vae_match_flat_parameters": False,
+        # `step_flat_vae`/`step_lstm_vae` read the retention window (3.2.2).
+        "checkpoint_keep_last": 3,
     }
     base.update(overrides)
     return base

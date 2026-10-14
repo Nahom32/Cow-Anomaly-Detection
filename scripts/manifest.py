@@ -117,6 +117,55 @@ class RunManifest:
         }
         return self
 
+    def record_checkpoint(self, name, path, **meta):
+        """Bind a checkpoint to the run by content hash (3.2.3).
+
+        A checkpoint is the one artifact whose silent corruption or substitution
+        changes a reported number without moving any input hash, so it is
+        recorded separately from generic artifacts and paired with
+        `verify_checkpoint`, which recomputes the hash and fails loudly.
+        """
+        entry = {"recorded_at": _timestamp()}
+        entry.update(meta)
+        if path is None or not os.path.isfile(path):
+            entry.update({"path": path, "missing": True})
+        else:
+            entry.update({
+                "path": os.path.abspath(path),
+                "sha256": sha256_file(path),
+                "bytes": os.path.getsize(path),
+            })
+        self.data.setdefault("checkpoints", {})[name] = entry
+        return self
+
+    def checkpoint(self, name):
+        return self.data.get("checkpoints", {}).get(name)
+
+    def verify_checkpoint(self, name, path=None):
+        """Recompute a recorded checkpoint's hash and fail on a mismatch (3.2.3).
+
+        Raises rather than returning a boolean: a caller that reaches here is
+        about to score with the checkpoint, and scoring with a corrupted or
+        substituted file is exactly the silent failure the checksum exists to
+        catch. `path` overrides the recorded path for a moved file.
+        """
+        entry = self.checkpoint(name)
+        if entry is None:
+            raise KeyError(f"no recorded checkpoint named {name!r}")
+        target = path or entry.get("path")
+        if target is None or not os.path.isfile(target):
+            raise FileNotFoundError(f"checkpoint {name!r} is not on disk at {target}")
+        expected = entry.get("sha256")
+        if expected is None:
+            raise ValueError(f"checkpoint {name!r} was recorded as missing and cannot be verified")
+        actual = sha256_file(target)
+        if actual != expected:
+            raise RuntimeError(
+                f"checkpoint {name!r} at {target} does not match the manifest "
+                f"(recorded {expected[:12]}, found {actual[:12]}): the file was corrupted or replaced"
+            )
+        return entry
+
     def record_array(self, name, array, **meta):
         entry = {"sha256": hash_array(array), "shape": list(array.shape)}
         entry.update(meta)

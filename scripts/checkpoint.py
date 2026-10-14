@@ -6,6 +6,7 @@ weights-only checkpoints (just a state_dict) are not loadable through this
 API — they predate the schema and must be archived.
 """
 
+import fnmatch
 import os
 import random
 
@@ -213,3 +214,97 @@ def is_legacy_checkpoint(obj):
         return True  # malformed new-format-like but missing version
     # Pure legacy: dict of state_dict items
     return True
+
+
+# ── Retention (3.2.2) ─────────────────────────────────────────────────
+
+# Epoch checkpoints carry their epoch in the filename so retention can order them
+# without loading each file. `best`/`final` deliberately do not: they are named
+# explicitly and always retained, so they can never be pruned by accident.
+EPOCH_CHECKPOINT_TEMPLATE = "{prefix}_epoch_{epoch:04d}.pth"
+_EPOCH_MARKER = "_epoch_"
+
+
+def epoch_checkpoint_name(prefix, epoch):
+    """Canonical filename for an epoch checkpoint."""
+    return EPOCH_CHECKPOINT_TEMPLATE.format(prefix=prefix, epoch=int(epoch))
+
+
+def parse_epoch_checkpoint(filename):
+    """The epoch encoded in an epoch-checkpoint filename, or None if not one.
+
+    Only names produced by `epoch_checkpoint_name` parse. `best`/`model` and any
+    unrelated `.pth` return None and are therefore outside retention's reach: a
+    prune can only ever delete a file it can place on the epoch timeline.
+    """
+    stem = os.path.basename(str(filename))
+    if not stem.endswith(".pth") or _EPOCH_MARKER not in stem:
+        return None
+    tail = stem[: -len(".pth")].rsplit(_EPOCH_MARKER, 1)[-1]
+    return int(tail) if tail.isdigit() else None
+
+
+def retention_plan(paths, keep_last=3, keep=()):
+    """Partition `paths` into `(kept, removed)` under the retention policy (3.2.2).
+
+    The policy is `best + final + the last N epochs`: everything named in `keep`
+    (the best-val and final checkpoints, whose names carry no epoch) is retained,
+    as are the `keep_last` highest-numbered epoch checkpoints. Only epoch
+    checkpoints beyond that are removed; a path that does not parse as one is
+    left alone, so a prune cannot delete a file it does not understand.
+    """
+    if keep_last < 0:
+        raise ValueError(f"keep_last must be non-negative, got {keep_last}")
+    keep_abs = {os.path.abspath(p) for p in keep}
+    parsed = {p: parse_epoch_checkpoint(p) for p in paths}
+    newest = sorted(
+        ((epoch, path) for path, epoch in parsed.items() if epoch is not None),
+        key=lambda item: item[0], reverse=True,
+    )
+    retain_abs = keep_abs | {os.path.abspath(path) for _, path in newest[:keep_last]}
+    removed = sorted(
+        path for path, epoch in parsed.items()
+        if epoch is not None and os.path.abspath(path) not in retain_abs
+    )
+    removed_abs = {os.path.abspath(path) for path in removed}
+    kept = sorted(path for path in paths if os.path.abspath(path) not in removed_abs)
+    return kept, removed
+
+
+def prune_checkpoints(paths, keep_last=3, keep=()):
+    """Apply `retention_plan` to disk; returns the `(kept, removed)` partition."""
+    kept, removed = retention_plan(paths, keep_last=keep_last, keep=keep)
+    for path in removed:
+        os.remove(path)
+    return kept, removed
+
+
+def prune_checkpoint_dir(directory, prefix, keep_last=3, keep=()):
+    """Prune `{prefix}_*.pth` in one directory (3.2.2).
+
+    Scoped by prefix because the flat and LSTM-VAE checkpoints share an output
+    directory: an unscoped prune would let one model's retention policy delete
+    the other's checkpoints.
+    """
+    pattern = f"{prefix}_*.pth"
+    paths = [
+        os.path.join(directory, name)
+        for name in sorted(os.listdir(directory))
+        if fnmatch.fnmatch(name, pattern)
+    ]
+    return prune_checkpoints(paths, keep_last=keep_last, keep=keep)
+
+
+def record_and_prune_checkpoints(*, manifest, directory, prefix, keep_last, final=None, best=None, step=None):
+    """Checksum the checkpoints a stage just wrote, then enforce retention.
+
+    Recording happens before the prune so the manifest describes what was
+    produced, not whatever survived. `manifest` may be None (a standalone caller
+    without provenance), in which case only the prune runs.
+    """
+    if manifest is not None:
+        for role, path in (("final", final), ("best", best)):
+            if path is not None and os.path.isfile(path):
+                manifest.record_checkpoint(f"{prefix}_{role}", path, role=role, step=step)
+    keep = [path for path in (final, best) if path is not None]
+    return prune_checkpoint_dir(directory, prefix, keep_last=keep_last, keep=keep)
