@@ -1,0 +1,6 @@
+{
+  "archived_at": "20261014T075739",
+  "note": "If trained under leaked split, scientifically void (tasklist 3.1.2). Not backfilled.",
+  "original_path": "/Users/nahomsenay/projects/Cow-Anomaly-Detection/pipeline_output/lstm_vae_model.pth",
+  "reason": "Legacy weights-only checkpoint (no format_version); predates unified schema (3.1)."
+}
