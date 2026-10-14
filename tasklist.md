@@ -402,7 +402,7 @@ produced a given number.
 
 ### 3.4 Checkpoints for non-neural models
 
-- [ ] **3.4.1** Mahalanobis needs `mu`, `Sigma`, **and the covariance-estimator name**
+- [x] **3.4.1** Mahalanobis needs `mu`, `Sigma`, **and the covariance-estimator name**
       (diagonal / full / regularized / Ledoit-Wolf / PCA+Mahalanobis) — the estimator identity is
       the experimental variable and must not be inferable from array shape.
 - [ ] **3.4.2** Euclidean needs `mu`; PCA needs components + explained variance; Isolation Forest
