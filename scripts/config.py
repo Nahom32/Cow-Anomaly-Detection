@@ -95,6 +95,16 @@ CONFIG = {
     "autoencoder_latent_dim": 32,
     "autoencoder_grad_clip": 1.0,
 
+    # Recurrent predictors (4.3.1). One hyperparameter block is shared by the GRU
+    # and LSTM variants so the architecture (the experimental variable) is the
+    # only thing that differs between them.
+    "predictor_epochs": 50,
+    "predictor_batch_size": 32,
+    "predictor_lr": 1e-3,
+    "predictor_hidden_dim": 128,
+    "predictor_num_layers": 1,
+    "predictor_grad_clip": 1.0,
+
     # LSTM-VAE
     "lstm_vae_epochs": 50,
     "lstm_vae_batch_size": 32,

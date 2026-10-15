@@ -43,6 +43,27 @@ def as_rows(data):
     return matrix
 
 
+def as_windows(data, min_seq_len=1):
+    """Coerce to a float32 `(n_windows, seq_len, n_features)` block, loudly.
+
+    The temporal rows score one window per observation, so a 2-D array here is a
+    mistaken provider, not something to reshape around. `min_seq_len` is the
+    shortest window the model can use — the recurrent predictors need at least
+    two steps (one to condition on, one to predict) and say so rather than
+    silently training on a single step.
+    """
+    windows = np.asarray(data, dtype=np.float32)
+    if windows.ndim != 3:
+        raise ValueError(f"expected a (n_windows, seq_len, n_features) array, got shape {windows.shape}")
+    if windows.shape[0] == 0 or windows.shape[2] == 0:
+        raise ValueError(f"neural detector received an empty split, shape {windows.shape}")
+    if windows.shape[1] < min_seq_len:
+        raise ValueError(
+            f"sequence length {windows.shape[1]} is shorter than the {min_seq_len} this model needs"
+        )
+    return windows
+
+
 def train_val_split(n_rows, val_fraction, seed):
     """Deterministic `(train_idx, val_idx)` over `n_rows`, drawn from one seed.
 
@@ -63,7 +84,14 @@ def train_val_split(n_rows, val_fraction, seed):
 
 
 class TorchDetector(Detector):
-    """A detector whose fitted state is a train-fitted scaler plus a trained module."""
+    """A detector whose fitted state is a train-fitted scaler plus a trained module.
+
+    `_prepare` is the one shape decision a subclass makes: the static rows take a
+    `(n_rows, n_features)` matrix, the temporal rows a `(n_windows, seq_len,
+    n_features)` block. The scaler is reduced over every axis except the feature
+    axis in both cases, so a window and a frame of the same cow get the same
+    statistics.
+    """
 
     kind = None
 
@@ -74,15 +102,18 @@ class TorchDetector(Detector):
         self.normalizer_ = None
         self.module_ = None
 
+    def _prepare(self, data):
+        return as_rows(data)
+
     def _fit_impl(self, train_data):
         """Fit the scaler and train the module, both from `train_data` alone (4.1.2)."""
-        rows = as_rows(train_data)
+        prepared = self._prepare(train_data)
         if self.seed is not None:
             set_seed(self.seed)
-        self.normalizer_ = MinMaxNormalizer().fit(rows)
-        scaled = self.normalizer_.transform(rows)
+        self.normalizer_ = MinMaxNormalizer().fit(prepared)
+        scaled = self.normalizer_.transform(prepared)
         train_idx, val_idx = train_val_split(len(scaled), self.val_fraction, self.seed)
-        self.module_ = self._build_module(scaled.shape[1])
+        self.module_ = self._build_module(scaled.shape[-1])
         self._train_module(scaled[train_idx], scaled[val_idx])
         self.module_.eval()
 
@@ -91,11 +122,15 @@ class TorchDetector(Detector):
             raise RuntimeError(f"{type(self).__name__} used before fit; call fit() first")
 
     def score(self, data):
-        """Squared reconstruction error per row, `||z - z_hat||^2`; higher is anomalous (4.1.1)."""
+        """Squared reconstruction error per observation, `||z - z_hat||^2` (4.1.1).
+
+        Reduced over every axis but the sample axis, so a flat row and a window
+        both yield one score per observation; higher is anomalous.
+        """
         self._require_fitted()
-        scaled = self.normalizer_.transform(as_rows(data))
+        scaled = self.normalizer_.transform(self._prepare(data))
         reconstruction = np.asarray(self._reconstruct(self.module_, scaled), dtype=np.float32)
-        return np.sum((scaled - reconstruction) ** 2, axis=1)
+        return np.sum((scaled - reconstruction) ** 2, axis=tuple(range(1, scaled.ndim)))
 
     @abc.abstractmethod
     def _build_module(self, input_dim):
@@ -108,3 +143,12 @@ class TorchDetector(Detector):
     @abc.abstractmethod
     def _reconstruct(self, module, scaled):
         """Deterministic reconstruction of `scaled`, same shape; no sampling (2.6)."""
+
+
+class SequenceTorchDetector(TorchDetector):
+    """A temporal detector: observations are `(n_windows, seq_len, n_features)` blocks."""
+
+    min_seq_len = 1
+
+    def _prepare(self, data):
+        return as_windows(data, self.min_seq_len)

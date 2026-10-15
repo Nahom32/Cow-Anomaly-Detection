@@ -109,6 +109,41 @@ def _vae(seed):
     )
 
 
+def _predictor(cell):
+    def factory(seed):
+        from scripts.models.generative import RecurrentPredictorDetector
+
+        return RecurrentPredictorDetector(
+            cell=cell,
+            seed=seed,
+            hidden_dim=CONFIG["predictor_hidden_dim"],
+            num_layers=CONFIG["predictor_num_layers"],
+            epochs=CONFIG["predictor_epochs"],
+            batch_size=CONFIG["predictor_batch_size"],
+            lr=CONFIG["predictor_lr"],
+            grad_clip=CONFIG["predictor_grad_clip"],
+        )
+
+    return factory
+
+
+def _lstm_vae(seed):
+    from scripts.models.generative import LSTMVAEDetector
+
+    return LSTMVAEDetector(
+        seed=seed,
+        hidden_dim=CONFIG["lstm_vae_hidden_dim"],
+        latent_dim=CONFIG["lstm_vae_latent_dim"],
+        num_layers=CONFIG["lstm_vae_num_layers"],
+        epochs=CONFIG["lstm_vae_epochs"],
+        batch_size=CONFIG["lstm_vae_batch_size"],
+        lr=CONFIG["lstm_vae_lr"],
+        beta=CONFIG["lstm_vae_beta"],
+        kl_warmup_epochs=CONFIG["lstm_vae_kl_warmup_epochs"],
+        grad_clip=CONFIG["lstm_vae_grad_clip"],
+    )
+
+
 # model id -> zero-argument-ish factory taking the cell seed. The `mahalanobis_*`
 # ids are 3.4.1's covariance estimators under explicit names: the estimator is
 # the experimental variable (3.4.1), so it is part of the model identity rather
@@ -125,6 +160,9 @@ MODEL_FACTORIES = {
     "pca": lambda seed: PCADetector(seed=seed),
     "autoencoder": _autoencoder,
     "vae": _vae,
+    "gru_predictor": _predictor("gru"),
+    "lstm_predictor": _predictor("lstm"),
+    "lstm_vae": _lstm_vae,
 }
 
 # The experimental matrix (4.2.2), transcribed from the table that isolates each
@@ -159,14 +197,14 @@ METHOD_MODELS = {
     "markov": "markov",
     "autoencoder": "autoencoder",
     "vae": "vae",
+    "gru_predictor": "gru_predictor",
+    "lstm_predictor": "lstm_predictor",
+    "lstm_vae": "lstm_vae",
 }
 
 # Matrix method -> the tasklist task that will implement it. Explicit, not a
 # comment: the spec check distinguishes "not built yet, tracked" from "missing".
 PENDING_METHODS = {
-    "gru_predictor": "4.3.1",
-    "lstm_predictor": "4.3.1",
-    "lstm_vae": "4.3.1",
     "gru_mahalanobis": "4.3.1",
 }
 

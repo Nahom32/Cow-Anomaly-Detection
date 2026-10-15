@@ -14,8 +14,13 @@ torch = pytest.importorskip("torch", reason="the neural detectors need torch")
 
 import scripts.run_benchmark as rb  # noqa: E402
 from scripts.models.detector import Detector  # noqa: E402
-from scripts.models.generative import AutoencoderDetector, VAEDetector  # noqa: E402
-from scripts.models.generative.base import as_rows, train_val_split  # noqa: E402
+from scripts.models.generative import (  # noqa: E402
+    AutoencoderDetector,
+    LSTMVAEDetector,
+    RecurrentPredictorDetector,
+    VAEDetector,
+)
+from scripts.models.generative.base import as_rows, as_windows, train_val_split  # noqa: E402
 
 DIM = 6
 
@@ -142,3 +147,80 @@ def test_as_rows_rejects_bad_shapes():
         as_rows(np.zeros((2, 2, 2), dtype=np.float32))
     with pytest.raises(ValueError, match="empty split"):
         as_rows(np.zeros((0, DIM), dtype=np.float32))
+
+
+SEQ = 4
+
+
+def _windows(n, seed, scale=0.05):
+    return np.random.default_rng(seed).normal(loc=0.5, scale=scale, size=(n, SEQ, DIM)).astype(np.float32)
+
+
+def _sequence_detectors(seed=42, epochs=3):
+    common = dict(seed=seed, epochs=epochs, batch_size=16, hidden_dim=16, num_layers=1)
+    return [
+        LSTMVAEDetector(latent_dim=4, **common),
+        RecurrentPredictorDetector(cell="gru", **common),
+    ]
+
+
+def test_temporal_model_ids_build_through_the_benchmark_factory():
+    for name in ("gru_predictor", "lstm_predictor", "lstm_vae"):
+        assert isinstance(rb.build_model(name, 0), Detector)
+
+
+@pytest.mark.parametrize("factory", [LSTMVAEDetector, RecurrentPredictorDetector])
+def test_sequence_detector_satisfies_the_contract(factory):
+    kwargs = {"latent_dim": 4} if factory is LSTMVAEDetector else {}
+    detector = factory(seed=42, epochs=1, batch_size=16, hidden_dim=16, num_layers=1, **kwargs)
+    detector.fit(_windows(48, 1))
+
+    scores = detector.score(_windows(10, 2))
+    assert scores.shape == (10,), "one score per window"
+    assert np.isfinite(scores).all() and (scores >= 0).all()
+
+    decisions = detector.predict(_windows(10, 2), threshold=float(np.median(scores)))
+    assert decisions.dtype == np.int8
+
+
+def test_gru_and_lstm_predictors_produce_comparable_scores():
+    windows = _windows(48, 1)
+    gru = RecurrentPredictorDetector(seed=42, cell="gru", epochs=2, batch_size=16, hidden_dim=16)
+    lstm = RecurrentPredictorDetector(seed=42, cell="lstm", epochs=2, batch_size=16, hidden_dim=16)
+
+    gru.fit(windows)
+    lstm.fit(windows)
+
+    assert gru.score(windows).shape == lstm.score(windows).shape == (48,)
+
+
+@pytest.mark.parametrize(
+    "detector",
+    [LSTMVAEDetector(seed=42, epochs=20, batch_size=16, hidden_dim=24, latent_dim=6, lr=1e-2),
+     RecurrentPredictorDetector(cell="gru", seed=42, epochs=20, batch_size=16, hidden_dim=24, lr=1e-2)],
+)
+def test_temporal_detectors_score_out_of_distribution_windows_higher(detector):
+    in_distribution = _windows(128, 1, scale=0.03)
+    detector.fit(in_distribution)
+
+    far = np.full((16, SEQ, DIM), 4.0, dtype=np.float32)
+    assert detector.score(far).mean() > detector.score(in_distribution).mean()
+
+
+def test_predictors_need_at_least_two_steps():
+    with pytest.raises(ValueError, match="shorter than the 2"):
+        as_windows(np.zeros((5, 1, DIM), dtype=np.float32), min_seq_len=2)
+
+    detector = RecurrentPredictorDetector(seed=42, cell="gru", epochs=1, batch_size=4, hidden_dim=8)
+    with pytest.raises(ValueError, match="shorter than the 2"):
+        detector.fit(np.zeros((8, 1, DIM), dtype=np.float32))
+
+
+def test_an_invalid_predictor_cell_is_loud():
+    with pytest.raises(ValueError, match="predictor cell"):
+        RecurrentPredictorDetector(cell="transformer")
+
+
+def test_as_windows_requires_three_dimensions():
+    with pytest.raises(ValueError, match="n_windows, seq_len, n_features"):
+        as_windows(np.zeros((5, DIM), dtype=np.float32))
