@@ -26,6 +26,7 @@ from scripts.checkpoint import (
 )
 from scripts.manifest import RunManifest
 from scripts.utils.hashing import sha256_file
+from scripts.utils.io import atomic_path, atomic_torch_save
 
 
 def test_rng_state_roundtrip():
@@ -182,6 +183,89 @@ def test_load_model_state_rejects_unexpected_or_missing_keys():
     target = torch.nn.Sequential(torch.nn.Linear(4, 2), torch.nn.Linear(2, 1))
     with pytest.raises(ValueError, match="does not match the model"):
         load_model_state(target, source.state_dict())
+
+
+# ── Round-trip integrity and atomicity (3.6.2) ────────────────────────
+
+
+def _populated_checkpoint():
+    """A checkpoint with every required field plus the extras a resume reads."""
+    model = torch.nn.Linear(4, 2)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+    optimizer.zero_grad()
+    model(torch.randn(3, 4)).sum().backward()
+    optimizer.step()
+    return build_checkpoint(
+        model_state=model.state_dict(),
+        optimizer_state=optimizer.state_dict(),
+        scheduler_state=None,
+        epoch=4,
+        best_metric=0.25,
+        best_metric_epoch=2,
+        best_state=model.state_dict(),
+        config={"vae_epochs": 5, "nested": {"a": 1}},
+        seed=11,
+        data_fingerprint="fp",
+        normalizer={"kind": "minmax", "min_": [0.0], "max_": [1.0]},
+    )
+
+
+def test_save_load_round_trips_every_field(tmp_path):
+    """3.6.2(a): what goes into a checkpoint is what comes out — tensors included."""
+    checkpoint = _populated_checkpoint()
+    path = tmp_path / "c.pt"
+    save_checkpoint(path, checkpoint)
+    loaded = load_checkpoint(path)
+
+    for key, tensor in checkpoint["model_state"].items():
+        assert torch.equal(loaded["model_state"][key], tensor)
+    for key, tensor in checkpoint["best_state"].items():
+        assert torch.equal(loaded["best_state"][key], tensor)
+    assert set(loaded["optimizer_state"]["state"]) == set(checkpoint["optimizer_state"]["state"])
+    assert loaded["epoch"] == checkpoint["epoch"]
+    assert loaded["best_metric"] == checkpoint["best_metric"]
+    assert loaded["best_metric_epoch"] == checkpoint["best_metric_epoch"]
+    assert loaded["seed"] == checkpoint["seed"]
+    assert loaded["config"] == checkpoint["config"]
+    assert loaded["data_fingerprint"] == checkpoint["data_fingerprint"]
+    assert loaded["normalizer"] == checkpoint["normalizer"]
+
+
+def test_atomic_torch_save_keeps_the_previous_file_on_an_interrupt(tmp_path, monkeypatch):
+    """3.6.2(b): a crash mid-write must leave the old file intact and no temp behind.
+
+    A truncated `.pth` still exists on disk, so existence-only step checks would
+    report the step done; the temp-then-rename write is what makes the interrupted
+    file either the whole old one or the whole new one.
+    """
+    path = tmp_path / "c.pt"
+    atomic_torch_save(path, {"version": 1})
+    before = path.read_bytes()
+
+    def interrupted(obj, f, *args, **kwargs):
+        with open(f, "wb") as handle:  # a partial payload in the temp file
+            handle.write(b"half-written")
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(torch, "save", interrupted)
+    with pytest.raises(RuntimeError):
+        atomic_torch_save(path, {"version": 2})
+
+    assert path.read_bytes() == before, "the previous checkpoint must survive"
+    assert sorted(os.listdir(tmp_path)) == [os.path.basename(path)], "no temp file may be left"
+
+
+def test_atomic_write_does_not_create_a_file_it_could_not_finish(tmp_path):
+    """A first-time write that dies leaves nothing behind to be mistaken for done."""
+    path = tmp_path / "never.pt"
+    with pytest.raises(RuntimeError):
+        with atomic_path(path) as tmp:
+            with open(tmp, "wb") as handle:
+                handle.write(b"partial")
+            raise RuntimeError("interrupted")
+
+    assert not path.exists()
+    assert list(tmp_path.iterdir()) == []
 
 
 # ── Retention (3.2.2) ─────────────────────────────────────────────────
