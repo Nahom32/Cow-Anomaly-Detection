@@ -93,6 +93,22 @@ def test_every_pending_method_names_its_task():
         assert task and task[0].isdigit(), f"{method!r} must cite the task that implements it"
 
 
+def test_the_problem_11_control_is_the_static_mahalanobis_row():
+    assert rb.CONTROL_METHOD == "mahalanobis"
+    assert rb.CONTROL_METHOD in EXPECTED_MATRIX, "the control is a declared matrix method, not a side table"
+    assert rb.METHOD_MODELS[rb.CONTROL_METHOD] == "mahalanobis_full"
+
+
+def test_a_roster_without_the_control_baseline_is_rejected(monkeypatch):
+    # Declared pending so the earlier empty-cell check stays quiet; the only thing
+    # wrong is that the control baseline is no longer implemented.
+    monkeypatch.delitem(rb.METHOD_MODELS, rb.CONTROL_METHOD)
+    monkeypatch.setitem(rb.PENDING_METHODS, rb.CONTROL_METHOD, "4.3.1")
+
+    with pytest.raises(RuntimeError, match="problem #11 control"):
+        rb.verify_matrix_spec()
+
+
 def test_a_silently_dropped_method_is_an_empty_cell(monkeypatch):
     monkeypatch.delitem(rb.METHOD_MODELS, "euclidean")
 

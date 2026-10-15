@@ -203,6 +203,14 @@ EXPERIMENTAL_MATRIX = {
 
 MATRIX_SOURCE = "improvements_on_vad.md:385-396 (problem #24)"
 
+# The problem #11 control: the simplest pathway that could explain the whole
+# result — the YOLO/SPPF feature vector straight into a Mahalanobis distance,
+# with no temporal or generative machinery. It is already a matrix method (the
+# static Mahalanobis runs on exactly that representation, `build_feature_dataset`
+# -> `MahalanobisDetector`), so 4.3.1 adds no new detector for it; the anchor is
+# checked so the control row cannot quietly vanish from the roster.
+CONTROL_METHOD = "mahalanobis"
+
 # Matrix method -> benchmark model id. Every method NOT listed here must appear
 # in PENDING_METHODS: absence from both is the "empty cell" 4.2.2 fails on, so a
 # new method cannot be added to the matrix and quietly go unrun.
@@ -324,6 +332,12 @@ def verify_matrix_spec():
     uncovered = sorted(set(MECHANISMS) - exercised)
     if uncovered:
         raise RuntimeError(f"mechanisms {uncovered} are exercised by no method; the column is empty (4.2.2)")
+
+    if CONTROL_METHOD not in METHOD_MODELS:
+        raise RuntimeError(
+            f"the problem #11 control ({CONTROL_METHOD!r}: YOLO representation -> Mahalanobis) is not "
+            "an implemented matrix method; the roster lost its simplest baseline (4.3.1)"
+        )
     return {"methods": len(methods), "mechanisms": len(MECHANISMS)}
 
 

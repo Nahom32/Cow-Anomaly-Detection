@@ -461,7 +461,13 @@ is a config change rather than bespoke plumbing.
 
 ### 4.3 Full model roster
 
-Every entry below is missing today except the two VAE training loops.
+Every entry below is missing today except the two VAE training loops. All four
+groups are now implemented: the static and temporal non-generative rows and the
+problem #11 control from the earlier Phase 3/4 work, and the neural/generative
+rows (AE, VAE, GRU/LSTM predictors, LSTM-VAE, GRU+Mahalanobis) in 4.3.1. The
+control needs no separate detector — the static Mahalanobis runs on the
+SPPF/YOLO representation straight from `build_feature_dataset`, and
+`verify_matrix_spec` checks the row is still present.
 
 | Group | Models |
 |---|---|
@@ -470,7 +476,7 @@ Every entry below is missing today except the two VAE training loops.
 | Combined | GRU + Mahalanobis |
 | Control | YOLO-representation → Mahalanobis (problem #11) |
 
-- [ ] **4.3.1** Implement each row. Scores per `improvements_on_vad.md:125-158` (static),
+- [x] **4.3.1** Implement each row. Scores per `improvements_on_vad.md:125-158` (static),
       `:160-192` (AE/VAE), `:194-230` (Markov, GRU/LSTM predictors), `:232-256` (LSTM-VAE).
 - [ ] **4.3.2** Log `cond(Sigma)` per Mahalanobis variant. Full covariance will be near-singular:
       256 dims vs ~1.5k independent training samples of heavily correlated SPPF features
