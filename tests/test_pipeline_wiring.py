@@ -12,7 +12,9 @@ import subprocess
 import sys
 
 import pytest
+import torch
 
+from scripts.checkpoint import save_model_checkpoint
 from scripts.data.splits import split_params
 from scripts.manifest import RunManifest
 from scripts.run_full_pipeline import is_step_done, main, step_flat_vae, step_lstm_vae
@@ -21,6 +23,15 @@ from scripts.utils.hashing import hash_json
 
 def source_of(func):
     return inspect.getsource(func)
+
+
+def _write_vae_checkpoint(path, config, data_fingerprint):
+    """A real, loadable stage artifact: the shape `is_step_done` now inspects (3.6.3)."""
+    save_model_checkpoint(
+        path, model_state={}, config=config, seed=config.get("random_seed"),
+        data_fingerprint=data_fingerprint,
+    )
+    return path
 
 
 def test_full_pipeline_seeds_before_doing_work():
@@ -124,28 +135,72 @@ def test_yolo_trainers_read_their_settings_from_config():
 def test_is_step_done_rejects_a_stale_checkpoint(tmp_path):
     """A checkpoint on disk from a different config must not count as done."""
     config = {"random_seed": 42, "vae_epochs": 100}
-    (tmp_path / "flat_vae_model.pth").write_bytes(b"weights")
+    _write_vae_checkpoint(tmp_path / "flat_vae_model.pth", config, "fp")
 
     manifest = RunManifest.create(tmp_path, config, seed=42)
     assert is_step_done(6, {}, str(tmp_path), config, manifest) is False, (
         "a checkpoint with no manifest entry cannot be verified — retrain rather than trust it"
     )
 
-    manifest.record_step(6, config_hash=hash_json(config))
+    manifest.record_step(6, config_hash=hash_json(config), data_fingerprint="fp")
     assert is_step_done(6, {}, str(tmp_path), config, manifest) is True
 
     other = RunManifest.create(tmp_path, {**config, "vae_epochs": 200}, seed=42)
-    other.record_step(6, config_hash=hash_json({**config, "vae_epochs": 200}))
-    assert is_step_done(6, {}, str(tmp_path), config, other) is False
+    other.record_step(6, config_hash=hash_json({**config, "vae_epochs": 200}), data_fingerprint="fp")
+    assert is_step_done(6, {}, str(tmp_path), {**config, "vae_epochs": 200}, other) is False
+
+
+def test_is_step_done_rejects_a_checkpoint_from_another_data_fingerprint(tmp_path):
+    """3.6.3: same config but a checkpoint trained on other data is still stale."""
+    config = {"random_seed": 42, "vae_epochs": 100}
+    _write_vae_checkpoint(tmp_path / "flat_vae_model.pth", config, "fingerprint-A")
+    manifest = RunManifest.create(tmp_path, config, seed=42)
+    manifest.record_step(6, config_hash=hash_json(config), data_fingerprint="fingerprint-B")
+    assert is_step_done(6, {}, str(tmp_path), config, manifest) is False
+
+
+def test_is_step_done_rejects_a_checkpoint_without_a_recorded_fingerprint(tmp_path):
+    """A legacy step entry (config hash only) cannot be tied to the run's data (3.6.3)."""
+    config = {"random_seed": 42}
+    _write_vae_checkpoint(tmp_path / "flat_vae_model.pth", config, "fp")
+    manifest = RunManifest.create(tmp_path, config, seed=42)
+    manifest.record_step(6, config_hash=hash_json(config))
+    assert is_step_done(6, {}, str(tmp_path), config, manifest) is False
+
+
+def test_is_step_done_rejects_a_corrupted_checkpoint(tmp_path):
+    config = {"random_seed": 42}
+    (tmp_path / "flat_vae_model.pth").write_bytes(b"not a torch checkpoint")
+    manifest = RunManifest.create(tmp_path, config, seed=42)
+    manifest.record_step(6, config_hash=hash_json(config), data_fingerprint="fp")
+    assert is_step_done(6, {}, str(tmp_path), config, manifest) is False
+
+
+def test_is_step_done_detects_a_substituted_checkpoint(tmp_path):
+    """A valid checkpoint from another run parses and matches config/fingerprint;
+    the recorded content hash is what exposes the substitution (3.2.3, 3.6.3)."""
+    config = {"random_seed": 42}
+    path = tmp_path / "flat_vae_model.pth"
+    _write_vae_checkpoint(path, config, "fp")
+    manifest = RunManifest.create(tmp_path, config, seed=42)
+    manifest.record_step(6, config_hash=hash_json(config), data_fingerprint="fp")
+    manifest.record_checkpoint("flat_vae_final", str(path), step=6)
+    assert is_step_done(6, {}, str(tmp_path), config, manifest) is True
+
+    save_model_checkpoint(
+        path, model_state=torch.nn.Linear(1, 1).state_dict(),
+        config=config, seed=42, data_fingerprint="fp",
+    )
+    assert is_step_done(6, {}, str(tmp_path), config, manifest) is False
 
 
 def test_resuming_a_run_keeps_prior_step_hashes(tmp_path):
     """A second run must see the first run's step hashes, not an empty manifest."""
     config = {"random_seed": 42, "vae_epochs": 100}
-    (tmp_path / "flat_vae_model.pth").write_bytes(b"weights")
+    _write_vae_checkpoint(tmp_path / "flat_vae_model.pth", config, "fp")
 
     first = RunManifest.create(tmp_path, config, seed=42)
-    first.record_step(6, config_hash=hash_json(config))
+    first.record_step(6, config_hash=hash_json(config), data_fingerprint="fp")
     first.save()
 
     second = RunManifest.load(tmp_path)
@@ -289,6 +344,23 @@ def test_find_last_pt_prefers_the_run_directory(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     assert os.path.realpath(find_last_pt()) == os.path.realpath(weights / "last.pt")
+
+
+def test_find_best_pt_does_not_scan_outside_the_project_dirs(tmp_path, monkeypatch):
+    """3.6.3: the old `glob("**/best.pt")` could pick up an unrelated experiment's
+    weights from anywhere under the CWD. The search is now scoped to the run dirs."""
+    from scripts.run_full_pipeline import find_best_pt
+
+    monkeypatch.chdir(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "best.pt").write_bytes(b"unrelated")
+    assert find_best_pt() is None, "weights outside the project dirs must be ignored"
+
+    weights = tmp_path / "runs" / "detect" / "cow_detector" / "yolo26n_cbvd" / "weights"
+    weights.mkdir(parents=True)
+    (weights / "best.pt").write_bytes(b"ours")
+    assert os.path.realpath(find_best_pt()) == os.path.realpath(weights / "best.pt")
 
 
 def test_train_yolo_resume_lets_ultralytics_restore_its_own_args():

@@ -425,7 +425,7 @@ produced a given number.
       hard failure on mismatch rather than a silent `load_state_dict` no-op.
 - [x] **3.6.2** Tests: (a) save/load round-trip equality, (b) atomicity under simulated interrupt,
       (c) resume reproduces the uninterrupted curve, (d) sidecar-mismatch detection.
-- [ ] **3.6.3** Rework `is_step_done` (`run_full_pipeline.py:248-263`) to validate a checkpoint's
+- [x] **3.6.3** Rework `is_step_done` (`run_full_pipeline.py:248-263`) to validate a checkpoint's
       config hash + data fingerprint rather than mere file existence. This closes 0.10 and
       8.2. Note `find_best_pt()` (`:62-72`) falls back to a recursive `glob("**/best.pt")` from CWD
       and can select unrelated weights.

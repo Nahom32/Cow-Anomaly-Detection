@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader, Subset, SubsetRandomSampler, TensorData
 from scripts.checkpoint import (
     data_fingerprint,
     latest_epoch_checkpoint,
+    load_checkpoint,
     record_and_prune_checkpoints,
     save_model_checkpoint,
 )
@@ -104,16 +105,35 @@ def save_state(output_dir, state):
         json.dump(state, f, indent=2)
 
 
-def find_best_pt():
-    # YOLO internally prepends runs/detect/ to the project path
-    for project_dir in ["runs/detect/cow_detector", "cow_detector"]:
-        exact = os.path.join(project_dir, "yolo26n_cbvd", "weights", "best.pt")
+# The two directories YOLO is allowed to write a run under (it prepends
+# `runs/detect/` to the configured project path, hence both spellings).
+YOLO_PROJECT_DIRS = ("runs/detect/cow_detector", "cow_detector")
+YOLO_RUN_NAME = "yolo26n_cbvd"
+
+
+def _yolo_weights(filename):
+    """Every plausible `<project>/<run>/weights/<filename>`, most specific first (3.6.3).
+
+    The search is scoped to the project directories above. `find_best_pt` used to
+    fall back to a recursive `glob("**/best.pt")` from the current working
+    directory, which could hand the pipeline an unrelated checkpoint from a
+    different experiment that merely happened to sit nearby.
+    """
+    candidates = []
+    for project_dir in YOLO_PROJECT_DIRS:
+        exact = os.path.join(project_dir, YOLO_RUN_NAME, "weights", filename)
         if os.path.isfile(exact):
-            return exact
-    # Broad recursive fallback
-    candidates = glob.glob("runs/detect/**/best.pt", recursive=True)
-    if not candidates:
-        candidates = glob.glob("**/best.pt", recursive=True)
+            candidates.append(exact)
+    for project_dir in YOLO_PROJECT_DIRS:
+        pattern = os.path.join(project_dir, "**", "weights", filename)
+        for found in sorted(glob.glob(pattern, recursive=True)):
+            if found not in candidates:
+                candidates.append(found)
+    return candidates
+
+
+def find_best_pt():
+    candidates = _yolo_weights("best.pt")
     return candidates[0] if candidates else None
 
 
@@ -121,15 +141,10 @@ def find_last_pt():
     """YOLO's rolling `last.pt` — the resume point for an interrupted run (3.3.2).
 
     Ultralytics writes it every epoch, so it is what makes a 150-epoch run
-    interrupted at epoch 140 continue at 141 instead of restarting at 1.
+    interrupted at epoch 140 continue at 141 instead of restarting at 1. Its
+    search is bounded the same way as `find_best_pt` (3.6.3).
     """
-    for project_dir in ["runs/detect/cow_detector", "cow_detector"]:
-        exact = os.path.join(project_dir, "yolo26n_cbvd", "weights", "last.pt")
-        if os.path.isfile(exact):
-            return exact
-    candidates = glob.glob("runs/detect/**/last.pt", recursive=True)
-    if not candidates:
-        candidates = glob.glob("**/last.pt", recursive=True)
+    candidates = _yolo_weights("last.pt")
     return candidates[0] if candidates else None
 
 
@@ -405,6 +420,9 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
         manifest.record_step(
             6,
             config_hash=hash_json(config),
+            # The fingerprint the checkpoint embedded, so `is_step_done` can tie a
+            # checkpoint's own provenance back to this run (3.6.3).
+            data_fingerprint=run_fingerprint,
             split_group_key=config["split_group_key"],
             split_sha256=describe(assignment)["sha256"],
             n_features=int(features.shape[0]),
@@ -619,6 +637,9 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
         manifest.record_step(
             7,
             config_hash=hash_json(config),
+            # The fingerprint the checkpoint embedded, so `is_step_done` can tie a
+            # checkpoint's own provenance back to this run (3.6.3).
+            data_fingerprint=run_fingerprint,
             split_group_key=config["split_group_key"],
             split_sha256=describe(assignment)["sha256"],
             n_sequences=len(seq_dataset),
@@ -702,27 +723,66 @@ def is_step_done(step, state, output_dir, config=None, manifest=None):
                 return False
         return True
     if step == 6:
-        return _checkpoint_is_current(os.path.join(output_dir, "flat_vae_model.pth"), "flat VAE", 6, config, manifest)
+        return _trained_checkpoint_is_current(
+            os.path.join(output_dir, "flat_vae_model.pth"), "flat_vae", "flat VAE", 6, config, manifest
+        )
     if step == 7:
-        return _checkpoint_is_current(os.path.join(output_dir, "lstm_vae_model.pth"), "LSTM-VAE", 7, config, manifest)
+        return _trained_checkpoint_is_current(
+            os.path.join(output_dir, "lstm_vae_model.pth"), "lstm_vae", "LSTM-VAE", 7, config, manifest
+        )
     return False
 
 
-def _checkpoint_is_current(path, label, step, config, manifest):
-    """Is the checkpoint on disk the one this config would have produced?"""
+def _trained_checkpoint_is_current(path, checkpoint_name, label, step, config, manifest):
+    """Did this run's config and data produce the checkpoint at `path`? (3.6.3)
+
+    Existence is not evidence: an interrupted re-run can leave an older
+    checkpoint on disk, and a checkpoint copied in from another run is a
+    perfectly valid file describing a different experiment. The checkpoint now
+    carries its own `config` and `data_fingerprint`, so both are checked directly
+    against the current run, and the manifest's recorded checksum confirms the
+    bytes on disk are the ones it recorded. Without a config and a manifest the
+    caller has opted into the existence-only form.
+    """
     if not os.path.isfile(path):
         return False
     if config is None or manifest is None:
         return True
-    if not manifest.is_current_for(config, step=step):
-        if manifest.step(step) is None:
-            print(
-                f"  {path} has no manifest entry, so it cannot be verified against the "
-                f"current config — retraining the {label} (3.6.3)"
-            )
-        else:
-            print(f"  config changed since the {label} was trained — its checkpoint is stale")
+    try:
+        checkpoint = load_checkpoint(path)
+    except Exception as exc:  # noqa: BLE001 - an unreadable checkpoint is simply not done
+        print(f"  {path} is not a loadable checkpoint ({exc}) — retraining the {label} (3.6.3)")
         return False
+    recorded = manifest.step(step)
+    if not recorded:
+        print(
+            f"  {path} has no manifest entry, so it cannot be tied to this run — "
+            f"retraining the {label} (3.6.3)"
+        )
+        return False
+    if hash_json(checkpoint.get("config") or {}) != hash_json(config):
+        print(f"  {path} was trained under a different config than the current one — stale (3.6.3)")
+        return False
+    expected = recorded.get("data_fingerprint")
+    if expected is None:
+        print(
+            f"  {path} predates data-fingerprint recording, so it cannot be tied to this "
+            f"run's data — retraining the {label} (3.6.3)"
+        )
+        return False
+    if checkpoint.get("data_fingerprint") != expected:
+        print(f"  {path} was trained on different data than this run — stale (3.6.3)")
+        return False
+    # The manifest recorded this checkpoint by content hash when the stage wrote
+    # it (3.2.3); re-checking catches a substituted or corrupted file that still
+    # happens to parse.
+    entry = manifest.checkpoint(f"{checkpoint_name}_final")
+    if entry is not None and entry.get("sha256"):
+        try:
+            manifest.verify_checkpoint(f"{checkpoint_name}_final", path=path)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            print(f"  {path} does not match its recorded checksum ({exc}) — stale (3.6.3)")
+            return False
     return True
 
 
