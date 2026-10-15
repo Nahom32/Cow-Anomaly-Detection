@@ -58,7 +58,6 @@ class MahalanobisDetector(FittedModel):
             self.mu_ = matrix.mean(axis=0)
             self.covariance_ = _fit_covariance(matrix, self.estimator, self.regularization)
         self._validate_state()
-        return self
 
     def score(self, features):
         matrix = as_matrix(features)

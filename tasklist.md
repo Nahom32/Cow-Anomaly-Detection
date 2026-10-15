@@ -440,7 +440,7 @@ is a config change rather than bespoke plumbing.
 
 ### 4.1 Detector interface
 
-- [ ] **4.1.1** Define one contract every model implements:
+- [x] **4.1.1** Define one contract every model implements:
       `fit(train_data) -> None`, `score(data) -> np.ndarray` (continuous anomaly score `A_t`),
       `predict(data, threshold) -> np.ndarray`. Today each model has bespoke training code and
       **no** score function at all.

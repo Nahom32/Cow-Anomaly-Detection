@@ -50,7 +50,6 @@ class MarkovDetector(FittedModel):
         self.n_states = n_states
         self.transition_matrix_ = transitions / transitions.sum(axis=1, keepdims=True)
         self.prior_ = starts / starts.sum()
-        return self
 
     def score(self, sequences):
         self._require_fitted()

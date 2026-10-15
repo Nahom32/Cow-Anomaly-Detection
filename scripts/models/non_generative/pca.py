@@ -42,7 +42,6 @@ class PCADetector(FittedModel):
         self.mean_ = pca.mean_.astype(np.float64)
         self.components_ = pca.components_.astype(np.float64)
         self.explained_variance_ = pca.explained_variance_.astype(np.float64)
-        return self
 
     def score(self, features):
         self._require_fitted()

@@ -22,6 +22,7 @@ import os
 import pickle
 
 from scripts.manifest import git_info
+from scripts.models.detector import Detector
 from scripts.utils.io import atomic_write_bytes
 
 ARTIFACT_FORMAT_VERSION = 1
@@ -60,7 +61,9 @@ def as_matrix(features):
 
 
 def register(cls):
-    """Register a `FittedModel` subclass so `load_detector` can dispatch on `kind`."""
+    """Register a `Detector` subclass so `load_detector` can dispatch on `kind`."""
+    if not issubclass(cls, Detector):
+        raise TypeError(f"{cls.__name__} does not implement the Detector contract (fit/score/predict, 4.1.1)")
     if not cls.kind:
         raise ValueError(f"{cls.__name__} must set a non-empty `kind`")
     _REGISTRY[cls.kind] = cls
@@ -128,13 +131,14 @@ def load_detector(path):
     return cls.from_envelope(envelope)
 
 
-class FittedModel:
+class FittedModel(Detector):
     """Base class for a detector whose entire fitted state is an explicit artifact.
 
     Subclasses set `kind`, implement `fit`/`score`/`state_dict`, and provide a
     `from_state` classmethod that rebuilds the object from a checkpointed state.
-    `fit` is where every statistic is estimated; callers fit on train only
-    (1.8 / 4.1). `score` is higher-is-more-anomalous.
+    `fit` is where every statistic is estimated and it returns nothing; callers
+    fit on train only (1.8 / 4.1). `score` is higher-is-more-anomalous and
+    `predict` comes from the `Detector` contract (4.1.1).
     """
 
     kind = None

@@ -41,8 +41,10 @@ def test_estimator_identity_is_stored_not_inferred(tmp_path):
     # `full` and `regularized` share a (d, d) covariance; only the envelope can
     # tell the two experiments apart (3.4.1).
     data = _data()
-    full = MahalanobisDetector("full").fit(data)
-    regularized = MahalanobisDetector("regularized", regularization=1e-3).fit(data)
+    full = MahalanobisDetector("full")
+    regularized = MahalanobisDetector("regularized", regularization=1e-3)
+    full.fit(data)
+    regularized.fit(data)
     assert full.covariance_.shape == regularized.covariance_.shape
 
     full_path, reg_path = tmp_path / "full.pkl", tmp_path / "reg.pkl"
@@ -56,13 +58,15 @@ def test_estimator_identity_is_stored_not_inferred(tmp_path):
 
 
 def test_diagonal_covariance_is_a_variance_vector():
-    model = MahalanobisDetector("diagonal").fit(_data())
+    model = MahalanobisDetector("diagonal")
+    model.fit(_data())
     assert model.covariance_.shape == (6,)
     assert model.state_dict()["covariance"].shape == (6,)
 
 
 def test_pca_mahalanobis_persists_components_and_explained_variance(tmp_path):
-    model = MahalanobisDetector("pca_mahalanobis", n_components=3, seed=1).fit(_data())
+    model = MahalanobisDetector("pca_mahalanobis", n_components=3, seed=1)
+    model.fit(_data())
     state = model.state_dict()
     assert state["components"].shape == (3, 6)
     assert state["explained_variance"].shape == (3,)
@@ -96,7 +100,8 @@ def test_unknown_estimator_is_rejected():
 
 def test_score_is_zero_at_the_training_mean():
     data = _data()
-    model = MahalanobisDetector("full").fit(data)
+    model = MahalanobisDetector("full")
+    model.fit(data)
     score = model.score(data.mean(axis=0).reshape(1, -1))
     assert score[0] == pytest.approx(0.0, abs=1e-10)
 

@@ -38,7 +38,8 @@ ALL_DETECTORS = [
 
 @pytest.mark.parametrize("factory, data", ALL_DETECTORS)
 def test_every_detector_round_trips_through_the_envelope(tmp_path, factory, data):
-    model = factory().fit(data)
+    model = factory()
+    model.fit(data)
     before = model.score(data)
     path = tmp_path / "artifact.pkl"
     model.save(path, config={}, seed=1, data_fingerprint="fp")
@@ -50,7 +51,8 @@ def test_every_detector_round_trips_through_the_envelope(tmp_path, factory, data
 
 def test_euclidean_scores_distance_from_the_mean():
     data = _features()
-    model = EuclideanDetector().fit(data)
+    model = EuclideanDetector()
+    model.fit(data)
     np.testing.assert_allclose(model.score(data.mean(axis=0).reshape(1, -1)), [0.0], atol=1e-12)
     assert model.state_dict()["mu"].shape == (5,)
 
@@ -61,7 +63,8 @@ def test_euclidean_empty_split_is_loud():
 
 
 def test_pca_stores_components_and_explained_variance(tmp_path):
-    model = PCADetector(n_components=3, seed=1).fit(_features())
+    model = PCADetector(n_components=3, seed=1)
+    model.fit(_features())
     state = model.state_dict()
     assert state["components"].shape == (3, 5)
     assert state["explained_variance"].shape == (3,)
@@ -73,7 +76,8 @@ def test_pca_stores_components_and_explained_variance(tmp_path):
 
 
 def test_pca_reconstruction_error_is_small_on_training_data():
-    model = PCADetector(n_components=None, seed=0).fit(_features())
+    model = PCADetector(n_components=None, seed=0)
+    model.fit(_features())
     outlier = model.score(np.full((1, 5), 50.0))
     assert outlier[0] > model.score(_features()).mean()
 
@@ -88,13 +92,15 @@ def test_pca_validates_component_count():
 
 def test_isolation_forest_flags_an_outlier():
     data = _features(seed=2)
-    model = IsolationForestDetector(n_estimators=50, seed=2).fit(data)
+    model = IsolationForestDetector(n_estimators=50, seed=2)
+    model.fit(data)
     assert model.score(np.full((1, 5), 25.0))[0] > model.score(data).mean()
     assert "estimator" in model.state_dict()
 
 
 def test_markov_transition_matrix_is_row_stochastic():
-    model = MarkovDetector().fit(_states())
+    model = MarkovDetector()
+    model.fit(_states())
     rows = model.transition_matrix_.sum(axis=1)
     np.testing.assert_allclose(rows, np.ones_like(rows))
     assert model.prior_.sum() == pytest.approx(1.0)
@@ -103,14 +109,16 @@ def test_markov_transition_matrix_is_row_stochastic():
 
 def test_markov_scores_rare_transitions_higher():
     states = np.array([[0, 1, 0, 1, 0, 1, 0, 1]])  # 0<->1 common, never 3
-    model = MarkovDetector(n_states=4, smoothing=1.0).fit(states)
+    model = MarkovDetector(n_states=4, smoothing=1.0)
+    model.fit(states)
     common = model.score(np.array([[0, 1]]))[0, 1]
     rare = model.score(np.array([[3, 2]]))[0, 1]
     assert rare > common
 
 
 def test_markov_rejects_unknown_states():
-    model = MarkovDetector(n_states=2).fit(np.array([[0, 1, 0, 1]]))
+    model = MarkovDetector(n_states=2)
+    model.fit(np.array([[0, 1, 0, 1]]))
     with pytest.raises(ValueError, match="chain has 2 states"):
         model.score(np.array([[0, 5]]))
 
@@ -124,12 +132,13 @@ def test_markov_rejects_non_integer_states():
 
 def test_load_detector_dispatches_on_kind(tmp_path):
     cases = [
-        (EuclideanDetector().fit(_features()), "euclidean"),
-        (PCADetector(n_components=2).fit(_features()), "pca"),
-        (IsolationForestDetector(n_estimators=10, seed=0).fit(_features()), "isolation_forest"),
-        (MarkovDetector().fit(_states()), "markov"),
+        (EuclideanDetector(), _features()),
+        (PCADetector(n_components=2, seed=1), _features()),
+        (IsolationForestDetector(n_estimators=10, seed=0), _features()),
+        (MarkovDetector(), _states()),
     ]
-    for model, _kind in cases:
+    for model, data in cases:
+        model.fit(data)
         path = tmp_path / f"{model.kind}.pkl"
         model.save(path, config={})
         assert type(load_detector(path)) is type(model)

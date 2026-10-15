@@ -36,7 +36,6 @@ class IsolationForestDetector(FittedModel):
             contamination=self.contamination,
             random_state=self.seed,
         ).fit(matrix)
-        return self
 
     def score(self, features):
         self._require_fitted()

@@ -24,7 +24,6 @@ class EuclideanDetector(FittedModel):
         if matrix.shape[0] == 0:
             raise ValueError("EuclideanDetector.fit received an empty split")
         self.mu_ = matrix.mean(axis=0)
-        return self
 
     def score(self, features):
         if self.mu_ is None:
