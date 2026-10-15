@@ -450,7 +450,7 @@ is a config change rather than bespoke plumbing.
 
 ### 4.2 Runner & coverage
 
-- [ ] **4.2.1** `run_benchmark.py`: iterate the full grid
+- [x] **4.2.1** `run_benchmark.py`: iterate the full grid
       `model x anomaly_setting x split x seed x context_length`, writing one JSON/CSV row per run
       into a single `results/` directory.
 - [ ] **4.2.2** **Coverage matrix with enforcement.** Encode the experimental matrix from

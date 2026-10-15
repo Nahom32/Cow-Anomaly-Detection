@@ -109,6 +109,24 @@ CONFIG = {
     "seq_len": 16,
     "seq_stride": 8,
 
+    # Phase 4 benchmark grid (4.2.1). One JSON row per cell of the cross product
+    # model x novelty_setting x split x seed x context_length, into `results_dir`.
+    # The three novelty settings are the ones tasklist Q3 scopes the grid over;
+    # their providers land with the Phase 6 drivers (6.2/6.4/6.5), and cells whose
+    # provider is missing fail loudly rather than scoring something else. `seeds`
+    # is 4.4.1's >=5-seeds-per-cell axis; `context_lengths` is the axis 7.1 sweeps
+    # over {1,3,5,10,20,40}; `splits` names the *scored* split (fit is always on
+    # the provider's train rows). The grid is inspectable without executing:
+    # `python -m scripts.run_benchmark --dry-run`.
+    "benchmark": {
+        "models": ["euclidean", "mahalanobis_full", "isolation_forest", "markov", "pca"],
+        "novelty_settings": ["leave_one_action_out", "unseen_transition", "temporal_corruption"],
+        "splits": ["train", "val", "test"],
+        "seeds": [42, 43, 44, 45, 46],
+        "context_lengths": [1],
+        "results_dir": "pipeline_output/results",
+    },
+
     # Checkpoint retention (3.2.2). Every run keeps its best-val and final
     # checkpoints plus the `keep_last` most recent per-epoch ones; older epoch
     # checkpoints are deleted after each stage. Disk cost becomes material once
