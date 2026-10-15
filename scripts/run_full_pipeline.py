@@ -15,6 +15,7 @@ from scripts.checkpoint import (
     data_fingerprint,
     latest_epoch_checkpoint,
     record_and_prune_checkpoints,
+    save_model_checkpoint,
 )
 from scripts.config import CONFIG
 from scripts.data.build_features import build_feature_dataset
@@ -37,7 +38,7 @@ from scripts.models.training import EarlyStopping, count_parameters, match_param
 from scripts.models.vae import VAE, plot_history, train_vae
 from scripts.utils.hashing import hash_json, sha256_file
 from scripts.utils.history import save_history
-from scripts.utils.io import atomic_torch_save, atomic_write_json
+from scripts.utils.io import atomic_write_json
 from scripts.utils.plotting import setup_matplotlib
 from scripts.utils.seeding import set_seed
 
@@ -64,15 +65,27 @@ def get_device():
     return "cpu"
 
 
-def _save_best_checkpoint(checkpoint, path, label):
-    """Write the best-val checkpoint a trainer reported, and say which epoch it was (2.7)."""
-    best_state = (checkpoint or {}).get("best_state")
+def _save_best_checkpoint(checkpoint, path, label, *, normalizer=None, config=None, seed=None, data_fingerprint=None):
+    """Write the best-val checkpoint a trainer reported, and say which epoch it is.
+
+    Written as a unified checkpoint carrying the train-fitted normalizer (3.5.1),
+    not a bare state_dict: the best weights and the scaler they belong to are then
+    one artifact and cannot be paired with a different run's sidecar.
+    """
+    best_state = checkpoint.get("best_state")
     if best_state is None:
         return False
-    atomic_torch_save(path, best_state)
+    save_model_checkpoint(
+        path, model_state=best_state, normalizer=normalizer, config=config, seed=seed,
+        data_fingerprint=data_fingerprint,
+        epoch=checkpoint.get("best_epoch"),
+        best_metric=checkpoint.get("best_metric"),
+        best_metric_epoch=checkpoint.get("best_epoch"),
+        best_state=best_state,
+    )
     print(
-        f"  {label}: best val epoch {checkpoint.get('best_epoch')} "
-        f"({checkpoint.get('best_metric'):.4f}); final epoch {checkpoint.get('final_epoch')}"
+        f"  {label} best checkpoint: epoch {checkpoint.get('best_epoch')} "
+        f"({checkpoint.get('best_metric')}) -> {os.path.basename(path)}"
     )
     return True
 
@@ -305,6 +318,7 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
 
     vae = VAE(features.shape[1], hidden_dim=config["vae_hidden_dim"], latent_dim=config["vae_latent_dim"])
     checkpoint = {}
+    run_fingerprint = data_fingerprint(manifest=manifest)
     # Resume an interrupted step 6 from its newest epoch checkpoint rather than
     # restarting at epoch 1 (3.3.2). `latest_epoch_checkpoint` returns None if the
     # checkpoints were written under a different config, so a changed run retrains.
@@ -320,19 +334,30 @@ def step_flat_vae(annotations_csv, frames_dir, feature_extractor, hook, device, 
         grad_clip=config["vae_grad_clip"],
         early_stopping=EarlyStopping(patience=config["vae_early_stopping_patience"]),
         seed=config["random_seed"], config=config,
-        data_fingerprint=data_fingerprint(manifest=manifest),
+        data_fingerprint=run_fingerprint,
         checkpoint_dir=output_dir, checkpoint_prefix="flat_vae",
         keep_last=config["checkpoint_keep_last"], resume_from=resume_from,
+        # The train-fitted scaler is embedded in every checkpoint the loop writes (3.5.1).
+        normalizer=normalizer.state_dict(),
     )
 
     save_history(history, os.path.join(output_dir, "flat_vae_history.csv"))
-    # Both checkpoints are written and which one the scores below come from is
-    # recorded. `flat_vae_model.pth` stays the final-epoch weights so existing
-    # artifacts keep their meaning; `flat_vae_best.pth` is the best-val epoch (2.7).
+    # Both checkpoints carry the normalizer with the weights (3.5.1) and which one
+    # the scores below come from is recorded. `flat_vae_model.pth` stays the
+    # final-epoch weights; `flat_vae_best.pth` is the best-val epoch (2.7).
     flat_final = os.path.join(output_dir, "flat_vae_model.pth")
     flat_best = os.path.join(output_dir, "flat_vae_best.pth")
-    atomic_torch_save(flat_final, vae.state_dict())
-    wrote_best = _save_best_checkpoint(checkpoint, flat_best, "flat VAE")
+    save_model_checkpoint(
+        flat_final, model_state=vae.state_dict(), normalizer=normalizer.state_dict(),
+        config=config, seed=config["random_seed"], data_fingerprint=run_fingerprint,
+        epoch=checkpoint.get("final_epoch"),
+        best_metric=checkpoint.get("best_metric"), best_metric_epoch=checkpoint.get("best_epoch"),
+        best_state=checkpoint.get("best_state"),
+    )
+    wrote_best = _save_best_checkpoint(
+        checkpoint, flat_best, "flat VAE", normalizer=normalizer.state_dict(),
+        config=config, seed=config["random_seed"], data_fingerprint=run_fingerprint,
+    )
     # Checksum both and enforce retention (3.2.2, 3.2.3): the manifest binds each
     # checkpoint to its content, and any epoch checkpoints beyond the last
     # `checkpoint_keep_last` are dropped so a Phase 4 grid cannot fill the disk.
@@ -505,6 +530,7 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
             num_layers=config["lstm_vae_num_layers"],
         )
     checkpoint = {}
+    run_fingerprint = data_fingerprint(manifest=manifest)
 
     # Resume an interrupted step 7 from its newest epoch checkpoint (3.3.2).
     resume_from = latest_epoch_checkpoint(output_dir, "lstm_vae", config=config) if resume else None
@@ -519,17 +545,28 @@ def step_lstm_vae(annotations_csv, frames_dir, feature_extractor, device, output
         grad_clip=config["lstm_vae_grad_clip"],
         early_stopping=EarlyStopping(patience=config["lstm_vae_early_stopping_patience"]),
         seed=config["random_seed"], config=config,
-        data_fingerprint=data_fingerprint(manifest=manifest),
+        data_fingerprint=run_fingerprint,
         checkpoint_dir=output_dir, checkpoint_prefix="lstm_vae",
         keep_last=config["checkpoint_keep_last"], resume_from=resume_from,
+        # The train-fitted scaler is embedded in every checkpoint the loop writes (3.5.1).
+        normalizer=normalizer.state_dict(),
     )
 
     # Final-epoch weights keep the existing artifact's meaning; the best-val epoch
-    # is written alongside and named in the manifest (2.7).
+    # is written alongside and named in the manifest (2.7). Both carry the scaler (3.5.1).
     lstm_final = os.path.join(output_dir, "lstm_vae_model.pth")
     lstm_best = os.path.join(output_dir, "lstm_vae_best.pth")
-    atomic_torch_save(lstm_final, vae.state_dict())
-    wrote_best = _save_best_checkpoint(checkpoint, lstm_best, "LSTM-VAE")
+    save_model_checkpoint(
+        lstm_final, model_state=vae.state_dict(), normalizer=normalizer.state_dict(),
+        config=config, seed=config["random_seed"], data_fingerprint=run_fingerprint,
+        epoch=checkpoint.get("final_epoch"),
+        best_metric=checkpoint.get("best_metric"), best_metric_epoch=checkpoint.get("best_epoch"),
+        best_state=checkpoint.get("best_state"),
+    )
+    wrote_best = _save_best_checkpoint(
+        checkpoint, lstm_best, "LSTM-VAE", normalizer=normalizer.state_dict(),
+        config=config, seed=config["random_seed"], data_fingerprint=run_fingerprint,
+    )
     # Same checksum + retention treatment as the flat VAE (3.2.2, 3.2.3), scoped
     # to the `lstm_vae` prefix so the two models cannot prune each other.
     record_and_prune_checkpoints(

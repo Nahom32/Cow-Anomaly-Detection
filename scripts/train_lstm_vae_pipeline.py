@@ -5,7 +5,12 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Subset, SubsetRandomSampler
 
-from scripts.checkpoint import data_fingerprint, latest_epoch_checkpoint, record_and_prune_checkpoints
+from scripts.checkpoint import (
+    data_fingerprint,
+    latest_epoch_checkpoint,
+    record_and_prune_checkpoints,
+    save_model_checkpoint,
+)
 from scripts.config import CONFIG
 from scripts.data.feature_cache import open_run_feature_cache
 from scripts.data.normalize import MinMaxNormalizer
@@ -18,7 +23,6 @@ from scripts.models.training import EarlyStopping, count_parameters, match_param
 from scripts.models.vae import VAE
 from scripts.utils.hashing import hash_json
 from scripts.utils.history import save_history
-from scripts.utils.io import atomic_torch_save
 from scripts.utils.seeding import set_seed
 
 
@@ -138,6 +142,7 @@ def main(resume=True):
 
     print("Starting LSTM-VAE training...")
     checkpoint = {}
+    run_fingerprint = data_fingerprint(manifest=manifest)
     # Continue an interrupted standalone run from its last epoch checkpoint (3.3.2).
     resume_from = latest_epoch_checkpoint(OUTPUT_DIR, "lstm_vae_anomaly", config=config) if resume else None
     history = train_lstm_vae(
@@ -149,17 +154,31 @@ def main(resume=True):
         lr_scheduler_patience=CONFIG["lstm_vae_lr_scheduler_patience"],
         grad_clip=CONFIG["lstm_vae_grad_clip"],
         early_stopping=EarlyStopping(patience=CONFIG["lstm_vae_early_stopping_patience"]),
-        seed=SEED, config=config, data_fingerprint=data_fingerprint(manifest=manifest),
+        seed=SEED, config=config, data_fingerprint=run_fingerprint,
         checkpoint_dir=OUTPUT_DIR, checkpoint_prefix="lstm_vae_anomaly",
         keep_last=CONFIG["checkpoint_keep_last"], resume_from=resume_from,
+        # The train-fitted scaler is embedded in every checkpoint the loop writes (3.5.1).
+        normalizer=normalizer.state_dict(),
     )
 
     lstm_final = os.path.join(OUTPUT_DIR, "lstm_vae_anomaly.pth")
     lstm_best = os.path.join(OUTPUT_DIR, "lstm_vae_anomaly_best.pth")
-    atomic_torch_save(lstm_final, vae.state_dict())
+    save_model_checkpoint(
+        lstm_final, model_state=vae.state_dict(), normalizer=normalizer.state_dict(),
+        config=config, seed=SEED, data_fingerprint=run_fingerprint,
+        epoch=checkpoint.get("final_epoch"),
+        best_metric=checkpoint.get("best_metric"), best_metric_epoch=checkpoint.get("best_epoch"),
+        best_state=checkpoint.get("best_state"),
+    )
     wrote_best = checkpoint.get("best_state") is not None
     if wrote_best:
-        atomic_torch_save(lstm_best, checkpoint["best_state"])
+        save_model_checkpoint(
+            lstm_best, model_state=checkpoint["best_state"], normalizer=normalizer.state_dict(),
+            config=config, seed=SEED, data_fingerprint=run_fingerprint,
+            epoch=checkpoint.get("best_epoch"),
+            best_metric=checkpoint.get("best_metric"), best_metric_epoch=checkpoint.get("best_epoch"),
+            best_state=checkpoint["best_state"],
+        )
         print(f"Best val epoch {checkpoint['best_epoch']} ({checkpoint['best_metric']:.4f}); "
               f"final epoch {checkpoint['final_epoch']}. Scores use the final checkpoint (2.7).")
     # Checksum what was written and enforce the retention window (3.2.2, 3.2.3).

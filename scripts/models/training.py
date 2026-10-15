@@ -202,7 +202,8 @@ def resume_training(path, model, optimizer, scheduler, stopper, device="cpu"):
 
 
 def _save_epoch_checkpoint(directory, prefix, epoch, *, model, optimizer, scheduler,
-                           stopper, history, config, seed, data_fingerprint, keep_last):
+                           stopper, history, config, seed, data_fingerprint, keep_last,
+                           normalizer=None):
     """Write one epoch checkpoint in the unified schema, then enforce retention (3.2.2)."""
     path = os.path.join(directory, epoch_checkpoint_name(prefix, epoch))
     save_checkpoint(
@@ -221,6 +222,9 @@ def _save_epoch_checkpoint(directory, prefix, epoch, *, model, optimizer, schedu
             # Extra fields a resume needs that the required schema does not name.
             history=history,
             early_stopping=stopper.state_dict(),
+            # The scaler the weights were trained under travels with them, so a
+            # resumed or scored checkpoint cannot be paired with a stale sidecar (3.5.1).
+            normalizer=normalizer,
         ),
     )
     if keep_last is not None:
@@ -237,7 +241,7 @@ def train_loop(
     grad_clip=None, early_stopping=None,
     seed=None, config=None, data_fingerprint=None,
     checkpoint_dir=None, checkpoint_prefix=None, keep_last=None,
-    resume_from=None,
+    resume_from=None, normalizer=None,
 ):
     """The one training loop both VAEs run (3.3.1).
 
@@ -306,10 +310,11 @@ def train_loop(
 
         if checkpoint_dir and checkpoint_prefix:
             _save_epoch_checkpoint(
-                checkpoint_dir, checkpoint_prefix, epoch,
+                directory=checkpoint_dir, prefix=checkpoint_prefix, epoch=epoch,
                 model=model, optimizer=optimizer, scheduler=scheduler, stopper=stopper,
                 history=history, config=config, seed=seed,
                 data_fingerprint=data_fingerprint, keep_last=keep_last,
+                normalizer=normalizer,
             )
 
         if stopper.should_stop:

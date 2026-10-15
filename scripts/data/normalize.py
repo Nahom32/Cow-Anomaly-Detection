@@ -17,6 +17,7 @@ EPS = 1e-8
 class _FittedNormalizer:
     """Shared fit/transform plumbing: an explicit fitted state, or a loud failure."""
 
+    kind = None
     state_fields = ()
 
     def __init__(self, eps=EPS):
@@ -27,6 +28,36 @@ class _FittedNormalizer:
     @property
     def is_fitted(self):
         return all(getattr(self, field) is not None for field in self.state_fields)
+
+    def state_dict(self):
+        """The fitted state as plain arrays, ready to embed in a model checkpoint (3.5.1).
+
+        `kind` is recorded so a loader can rebuild the right class without being
+        told which scaler a run used; the field names are the same ones the
+        `*_feature_min.npy` sidecars carry, so the two can be compared directly.
+        """
+        if not self.is_fitted:
+            raise RuntimeError(f"{type(self).__name__}.state_dict called before fit")
+        state = {"kind": self.kind, "eps": self.eps}
+        for field in self.state_fields:
+            state[field] = np.asarray(getattr(self, field))
+        return state
+
+    @classmethod
+    def from_state(cls, state):
+        """Rebuild a fitted normalizer from `state_dict` output, failing loudly."""
+        if not isinstance(state, dict):
+            raise TypeError(f"normalizer state must be a dict, got {type(state).__name__}")
+        if state.get("kind") != cls.kind:
+            raise ValueError(f"{cls.__name__} cannot load a {state.get('kind')!r} normalizer")
+        normalizer = cls(eps=state.get("eps", EPS))
+        for field in cls.state_fields:
+            if field not in state:
+                raise ValueError(f"normalizer state missing {field!r}")
+            setattr(normalizer, field, np.asarray(state[field]))
+        if not normalizer.is_fitted:
+            raise ValueError("normalizer state is incomplete")
+        return normalizer
 
     def _require_fitted(self, name):
         if not self.is_fitted:
@@ -53,6 +84,7 @@ class _FittedNormalizer:
 class MinMaxNormalizer(_FittedNormalizer):
     """Per-feature min-max scaler: fit on train, apply to anything."""
 
+    kind = "minmax"
     state_fields = ("min_", "max_")
 
     def fit(self, features):
@@ -79,6 +111,7 @@ class ZScoreNormalizer(_FittedNormalizer):
     a flat one on the same features. `transform` keeps the input's shape.
     """
 
+    kind = "zscore"
     state_fields = ("mean_", "std_")
 
     def fit(self, features):
@@ -111,3 +144,20 @@ def _as_matrix(features):
     statistics."""
     array = _as_array(features)
     return array.reshape(-1, array.shape[-1])
+
+
+NORMALIZER_KINDS = {"minmax": MinMaxNormalizer, "zscore": ZScoreNormalizer}
+
+
+def load_normalizer(state):
+    """Rebuild the fitted normalizer a checkpoint embedded, dispatching on `kind` (3.5.1)."""
+    if not isinstance(state, dict):
+        raise TypeError(f"normalizer state must be a dict, got {type(state).__name__}")
+    kind = state.get("kind")
+    try:
+        cls = NORMALIZER_KINDS[kind]
+    except KeyError:
+        raise ValueError(
+            f"unknown normalizer kind {kind!r}; known: {sorted(NORMALIZER_KINDS)}"
+        ) from None
+    return cls.from_state(state)

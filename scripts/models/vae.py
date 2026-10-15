@@ -71,7 +71,7 @@ def train_vae(
     grad_clip=None, early_stopping=None,
     seed=None, config=None, data_fingerprint=None,
     checkpoint_dir=None, checkpoint_prefix="flat_vae", keep_last=None,
-    resume_from=None,
+    resume_from=None, normalizer=None,
 ):
     """Flat-VAE training: the shared loop with this model's loss and evaluator (3.3.1).
 
@@ -89,6 +89,7 @@ def train_vae(
         early_stopping=early_stopping, seed=seed, config=config,
         data_fingerprint=data_fingerprint, checkpoint_dir=checkpoint_dir,
         checkpoint_prefix=checkpoint_prefix, keep_last=keep_last, resume_from=resume_from,
+        normalizer=normalizer,
     )
 
 

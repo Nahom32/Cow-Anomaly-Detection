@@ -165,9 +165,50 @@ def build_checkpoint(
 
 
 def save_checkpoint(path, checkpoint):
-    cp = _validate(checkpoint)
-    atomic_torch_save(path, cp)
+    _validate(checkpoint)
+    atomic_torch_save(path, checkpoint)
     return path
+
+
+def save_model_checkpoint(
+    path,
+    *,
+    model_state,
+    normalizer=None,
+    config=None,
+    seed=None,
+    data_fingerprint=None,
+    epoch=None,
+    best_metric=None,
+    best_metric_epoch=None,
+    best_state=None,
+    extra=None,
+):
+    """Write a loadable model checkpoint that carries its fitted normalizer (3.5.1).
+
+    The final/best artifacts a scorer loads are the ones that must not be paired
+    with a loose `*_feature_min.npy` sidecar, so this is the single writer for
+    them: weights and `normalizer` state (a `state_dict`, not the object) go into
+    one envelope and `load_checkpoint` returns both together. An optimizer and
+    scheduler are deliberately absent — these are inference artifacts, not resume
+    points.
+    """
+    checkpoint = build_checkpoint(
+        model_state=model_state,
+        optimizer_state=None,
+        scheduler_state=None,
+        epoch=0 if epoch is None else int(epoch),
+        best_metric=best_metric,
+        best_metric_epoch=best_metric_epoch,
+        best_state=best_state,
+        config=config or {},
+        seed=seed,
+        data_fingerprint=data_fingerprint,
+        normalizer=normalizer,
+        **(extra or {}),
+    )
+    save_checkpoint(path, checkpoint)
+    return checkpoint
 
 
 def load_checkpoint(path, map_location="cpu"):

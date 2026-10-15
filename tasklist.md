@@ -412,7 +412,7 @@ produced a given number.
 
 ### 3.5 Bind preprocessing to the model
 
-- [ ] **3.5.1** Store scaler/normalizer state **inside** the checkpoint.
+- [x] **3.5.1** Store scaler/normalizer state **inside** the checkpoint.
       `flat_vae_feature_min.npy`/`_max.npy` and `lstm_vae_feature_mean.npy`/`_std.npy` are separate
       sidecars that can be mismatched against the weights they belong to — a silent correctness
       hazard at scoring time.

@@ -531,6 +531,19 @@ def test_step_flat_vae_writes_best_and_final_checkpoints(tmp_path, annotations_c
     assert (out / "flat_vae_best.pth").is_file()
 
 
+def test_step_flat_vae_embeds_the_train_scaler_in_its_checkpoints(tmp_path, annotations_csv, features):
+    """3.5.1: the final and best checkpoints carry the fitted min/max themselves."""
+    from scripts.checkpoint import load_checkpoint
+    from scripts.data.normalize import load_normalizer
+
+    _, saved_min, saved_max = run_step_flat_vae(tmp_path, features, annotations_csv)
+    out = tmp_path / "out"
+    for name in ("flat_vae_model.pth", "flat_vae_best.pth"):
+        embedded = load_normalizer(load_checkpoint(out / name)["normalizer"])
+        np.testing.assert_array_equal(embedded.min_, saved_min)
+        np.testing.assert_array_equal(embedded.max_, saved_max)
+
+
 # ── The test split (1.5) ──────────────────────────────────────────────────
 #
 # With `test_split > 0` a third, never-trained-on partition exists. The fit must
