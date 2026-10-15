@@ -457,7 +457,7 @@ is a config change rather than bespoke plumbing.
       `improvements_on_vad.md:385-396` (problem #24) — a 10-model x 5-mechanism grid — as a declared
       spec, and make the benchmark **fail loudly on any empty cell**. Coverage is a checked
       invariant, not a documentation promise.
-- [ ] **4.2.3** Record per-cell coverage status (complete / missing / failed) in the results index.
+- [x] **4.2.3** Record per-cell coverage status (complete / missing / failed) in the results index.
 
 ### 4.3 Full model roster
 

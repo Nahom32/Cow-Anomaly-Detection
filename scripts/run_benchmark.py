@@ -28,6 +28,12 @@ and no foreign row may exist. Tasklist 4.2.2 calls this a "10-model x
 5-mechanism grid", but the cited source declares four mechanisms, and four is
 what is encoded.
 
+Each cell's coverage status is recorded as complete / missing / failed (4.2.3):
+a failed cell writes a `.failed.json` marker carrying its error instead of a row,
+and every run rewrites `coverage.json` as a projection over the row and marker
+files, so a partial run is legible rather than mistakable for a full one. The
+run still fails loudly — the status is a record, not an excuse.
+
 Names say novelty, not anomaly (6.1): the settled framing is unseen-during-
 training, with no clinical claim. The axis is still the one 4.2.1 calls
 `anomaly_setting`.
@@ -154,6 +160,13 @@ RESULT_FIELDS = (
 
 GRID_AXES = ("models", "novelty_settings", "splits", "seeds", "context_lengths")
 _NAME_RE = re.compile(r"^[a-z0-9_]+$")
+
+# Per-cell coverage statuses (4.2.3) and the artifacts that carry them. A failed
+# cell writes a `.failed.json` marker (its error, no scores); every run rewrites
+# `coverage.json` as a projection over the row and marker files.
+STATUSES = ("complete", "missing", "failed")
+FAILED_SUFFIX = ".failed.json"
+COVERAGE_FILENAME = "coverage.json"
 
 
 def register_setting(name, provider):
@@ -303,13 +316,19 @@ def verify_coverage(config, results_dir=None):
     config claims to run, so a cell with no row is an empty cell and a row with
     no cell is an untraceable result (4.7.4). A run of a subset is fine — it is
     checked against the grid it declared — but a results directory left holding
-    another config's rows is not. Returns a small summary for logging / 4.2.3.
+    another config's rows is not. Failure markers (`.failed.json`) and the
+    coverage index are status records, not rows: a cell that failed is missing
+    here. Returns a small summary for logging.
     """
     results_dir = results_dir or config["benchmark"]["results_dir"]
     if not os.path.isdir(results_dir):
         raise FileNotFoundError(f"no results directory at {results_dir!r}; coverage cannot be checked (4.2.2)")
     declared = {cell.cell_id() for cell in benchmark_grid(config)}
-    present = {name[: -len(".json")] for name in os.listdir(results_dir) if name.endswith(".json")}
+    present = {
+        name[: -len(".json")]
+        for name in os.listdir(results_dir)
+        if name.endswith(".json") and not name.endswith(FAILED_SUFFIX) and name != COVERAGE_FILENAME
+    }
     missing = sorted(declared - present)
     foreign = sorted(present - declared)
     if missing or foreign:
@@ -318,6 +337,49 @@ def verify_coverage(config, results_dir=None):
             f"{len(foreign)} result(s) not in the declared grid {foreign}"
         )
     return {"declared": len(declared), "present": len(present)}
+
+
+def coverage_status(config, results_dir=None):
+    """One entry per declared cell: complete / missing / failed (4.2.3).
+
+    Read from the files on disk, so it is re-derivable without re-running: a
+    cell is `complete` if its row JSON (scores + provenance) exists, `failed` if
+    a failure marker records the error it raised, and `missing` if neither —
+    which is what a subset run, a crash before the cell, or a deleted row looks
+    like. Returns the entries sorted by cell id.
+    """
+    results_dir = results_dir or config["benchmark"]["results_dir"]
+    if not os.path.isdir(results_dir):
+        raise FileNotFoundError(f"no results directory at {results_dir!r}; status cannot be read (4.2.3)")
+    entries = []
+    for cell in benchmark_grid(config):
+        row = os.path.join(results_dir, f"{cell.cell_id()}.json")
+        marker = os.path.join(results_dir, f"{cell.cell_id()}{FAILED_SUFFIX}")
+        if os.path.isfile(row):
+            status, error = "complete", None
+        elif os.path.isfile(marker):
+            with open(marker, encoding="utf-8") as handle:
+                status, error = "failed", json.load(handle).get("error")
+        else:
+            status, error = "missing", None
+        entries.append({**cell.axes(), "cell_id": cell.cell_id(), "status": status, "error": error})
+    entries.sort(key=lambda entry: entry["cell_id"])
+    return entries
+
+
+def write_coverage_index(config, results_dir=None):
+    """Write `coverage.json`: per-cell status plus counts (4.2.3).
+
+    A projection over the row and failure files, like `results.csv` — never a
+    second source of truth. Regenerated on every run so an index left from an
+    earlier run cannot describe a grid that has since changed.
+    """
+    results_dir = results_dir or config["benchmark"]["results_dir"]
+    entries = coverage_status(config, results_dir)
+    counts = {status: sum(entry["status"] == status for entry in entries) for status in STATUSES}
+    path = os.path.join(results_dir, COVERAGE_FILENAME)
+    atomic_write_json(path, {"counts": counts, "cells": entries})
+    return path
 
 
 def _rows(data, key):
@@ -338,8 +400,8 @@ def run_cell(cell, config, results_dir=None):
     Fit provenance is asserted (4.1.2) and score integrity re-checked (shape
     one per scored row, all finite) because either failure would otherwise
     surface later as a plausible-but-wrong metric rather than at the run that
-    produced it. A cell that fails raises: there is no status field yet —
-    complete/missing/failed accounting is 4.2.3's job.
+    produced it. A cell that fails raises; `run_benchmark` records the failure
+    as a status (4.2.3) and then fails the run.
     """
     results_dir = results_dir or config["benchmark"]["results_dir"]
     set_seed(cell.seed)
@@ -395,11 +457,30 @@ def run_cell(cell, config, results_dir=None):
     return row
 
 
+def record_cell_failure(cell, error, results_dir):
+    """Persist a failed cell's status so the coverage index can report it (4.2.3).
+
+    A cell that raised leaves no row, so without this marker a failure is
+    indistinguishable from a cell that never ran. The marker holds the error and
+    the axes, never scores, and is excluded from `results.csv`.
+    """
+    marker = {
+        **cell.axes(),
+        "cell_id": cell.cell_id(),
+        "error": f"{type(error).__name__}: {error}",
+        "error_type": type(error).__name__,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    path = os.path.join(results_dir, f"{cell.cell_id()}{FAILED_SUFFIX}")
+    atomic_write_json(path, marker)
+    return path
+
+
 def write_results_csv(results_dir):
     """Regenerate `results.csv` from every row JSON — a projection, not a second source of truth."""
     rows = []
     for name in sorted(os.listdir(results_dir)):
-        if name.endswith(".json"):
+        if name.endswith(".json") and not name.endswith(FAILED_SUFFIX) and name != COVERAGE_FILENAME:
             with open(os.path.join(results_dir, name), encoding="utf-8") as handle:
                 rows.append(json.load(handle))
     buffer = io.StringIO()
@@ -412,16 +493,31 @@ def write_results_csv(results_dir):
 
 
 def run_benchmark(config, results_dir=None):
-    """Execute every declared cell once, then assert the run covered the grid.
+    """Execute every declared cell, record each cell's status, then assert the grid.
 
-    The preset check runs before the first cell (a mistyped method should not
-    surface at cell 200), the post check after the last (a run is only complete
-    if every declared cell produced a traceable row).
+    The spec check runs before the first cell (a mistyped method should not
+    surface at cell 200). A cell that raises is recorded as a failed status —
+    marker plus coverage index (4.2.3) — and the run continues, so the index
+    shows *which* cells are empty rather than only the first; then the run fails
+    loudly (4.2.2). Only a run with no failures goes on to the coverage check.
     """
     verify_matrix_spec()
     cells = benchmark_grid(config)
     results_dir = results_dir or config["benchmark"]["results_dir"]
-    rows = [run_cell(cell, config, results_dir) for cell in cells]
+    rows, failures = [], {}
+    for cell in cells:
+        try:
+            rows.append(run_cell(cell, config, results_dir))
+        except Exception as error:  # a failed cell is a recorded status, not a silent skip (4.2.3)
+            record_cell_failure(cell, error, results_dir)
+            failures[cell.cell_id()] = f"{type(error).__name__}: {error}"
+    write_results_csv(results_dir)
+    write_coverage_index(config, results_dir)
+    if failures:
+        raise RuntimeError(
+            f"{len(failures)} of {len(cells)} benchmark cell(s) failed; "
+            f"see {COVERAGE_FILENAME} (4.2.3): {sorted(failures)}"
+        )
     verify_coverage(config, results_dir)
     return rows
 

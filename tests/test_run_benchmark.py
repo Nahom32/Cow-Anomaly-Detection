@@ -125,6 +125,7 @@ def test_run_writes_one_row_per_cell_into_one_results_dir(tmp_path, monkeypatch)
 
     assert len(rows) == 2
     assert sorted(p.name for p in results.iterdir()) == [
+        "coverage.json",
         "euclidean__leave_one_action_out__test__s42__k1.json",
         "euclidean__leave_one_action_out__test__s43__k1.json",
         "results.csv",

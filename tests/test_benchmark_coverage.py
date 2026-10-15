@@ -149,7 +149,8 @@ def test_verify_coverage_passes_on_a_completed_run(tmp_path, monkeypatch):
 
 def test_verify_coverage_lists_an_empty_cell(tmp_path, monkeypatch):
     cfg, results = _small_run(tmp_path, monkeypatch)
-    victim = sorted(name for name in results.iterdir() if name.suffix == ".json")[0]
+    rows = sorted(name for name in results.iterdir() if name.suffix == ".json" and name.name != rb.COVERAGE_FILENAME)
+    victim = rows[0]
     victim.unlink()
 
     with pytest.raises(RuntimeError, match=victim.stem):
