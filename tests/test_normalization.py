@@ -544,6 +544,23 @@ def test_step_flat_vae_embeds_the_train_scaler_in_its_checkpoints(tmp_path, anno
         np.testing.assert_array_equal(embedded.max_, saved_max)
 
 
+def test_step_flat_vae_checkpoint_verifies_against_its_sidecars(tmp_path, annotations_csv, features):
+    """3.5.2: the loader accepts the stage's own checkpoint+sidecar pair."""
+    from scripts.data.normalize import load_checkpoint_normalizer
+
+    run_step_flat_vae(tmp_path, features, annotations_csv)
+    out = tmp_path / "out"
+    normalizer = load_checkpoint_normalizer(
+        out / "flat_vae_model.pth",
+        sidecars={
+            "min_": str(out / "flat_vae_feature_min.npy"),
+            "max_": str(out / "flat_vae_feature_max.npy"),
+        },
+    )
+    np.testing.assert_array_equal(normalizer.min_, np.load(out / "flat_vae_feature_min.npy"))
+    np.testing.assert_array_equal(normalizer.max_, np.load(out / "flat_vae_feature_max.npy"))
+
+
 # ── The test split (1.5) ──────────────────────────────────────────────────
 #
 # With `test_split > 0` a third, never-trained-on partition exists. The fit must

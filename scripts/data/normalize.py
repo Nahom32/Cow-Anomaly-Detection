@@ -161,3 +161,62 @@ def load_normalizer(state):
             f"unknown normalizer kind {kind!r}; known: {sorted(NORMALIZER_KINDS)}"
         ) from None
     return cls.from_state(state)
+
+
+def verify_normalizer_sidecars(normalizer, sidecars, *, atol=0.0):
+    """Raise if any sidecar array disagrees with the fitted normalizer (3.5.2).
+
+    `sidecars` maps a fitted field (`"min_"`, `"max_"`, `"mean_"`, `"std_"`) to a
+    path or an array. A shape or value difference means the two came from
+    different runs, and scoring with either is scoring with the wrong scaler, so
+    it is an error rather than a warning.
+    """
+    if not normalizer.is_fitted:
+        raise RuntimeError("cannot verify sidecars against an unfitted normalizer")
+    for field, source in sidecars.items():
+        if field not in normalizer.state_fields or getattr(normalizer, field) is None:
+            raise ValueError(f"normalizer has no fitted field {field!r}; expected {normalizer.state_fields}")
+        expected = np.asarray(getattr(normalizer, field))
+        actual = np.load(source) if isinstance(source, str) else np.asarray(source)
+        if actual.shape != expected.shape:
+            raise ValueError(
+                f"sidecar {field!r} has shape {actual.shape} but the checkpoint's normalizer has "
+                f"{expected.shape}; refusing to score with a mismatched scaler"
+            )
+        if not np.allclose(actual, expected, rtol=0, atol=atol):
+            raise ValueError(
+                f"sidecar {field!r} disagrees with the checkpoint's normalizer; the pair are from "
+                "different runs"
+            )
+    return normalizer
+
+
+def checkpoint_normalizer(checkpoint, *, sidecars=None, atol=0.0):
+    """The normalizer a checkpoint was trained with, refusing to guess (3.5.2).
+
+    A checkpoint written by the pipeline carries its scaler under `normalizer`,
+    bound to the weights by the same envelope. A legacy checkpoint — weights plus
+    loose sidecar files — cannot be shown to match, so this fails loudly instead
+    of scoring with a scaler from a different run. Any `sidecars` handed in must
+    agree with the embedded state exactly.
+    """
+    if not isinstance(checkpoint, dict):
+        raise TypeError(f"checkpoint must be a dict, got {type(checkpoint).__name__}")
+    state = checkpoint.get("normalizer")
+    if state is None:
+        raise ValueError(
+            "checkpoint carries no normalizer; it predates 3.5, when the scaler existed only in "
+            "sidecar files. Scoring it could apply a different run's scaler, so it is rejected. "
+            "Re-save the checkpoint through save_model_checkpoint, or retrain."
+        )
+    normalizer = load_normalizer(state)
+    if sidecars:
+        verify_normalizer_sidecars(normalizer, sidecars, atol=atol)
+    return normalizer
+
+
+def load_checkpoint_normalizer(path, *, sidecars=None, atol=0.0, map_location="cpu"):
+    """Load a model checkpoint and return its bound, sidecar-verified normalizer (3.5.2)."""
+    from scripts.checkpoint import load_checkpoint
+
+    return checkpoint_normalizer(load_checkpoint(path, map_location=map_location), sidecars=sidecars, atol=atol)
