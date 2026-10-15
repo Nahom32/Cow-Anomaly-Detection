@@ -30,7 +30,7 @@ class PCADetector(FittedModel):
         self.components_ = None
         self.explained_variance_ = None
 
-    def fit(self, features):
+    def _fit_impl(self, features):
         from sklearn.decomposition import PCA
 
         matrix = as_matrix(features)

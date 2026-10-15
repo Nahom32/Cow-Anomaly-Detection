@@ -37,11 +37,13 @@ def test_envelope_carries_provenance(tmp_path):
         config={"cov_regularization": 1e-6},
         seed=3,
         data_fingerprint="deadbeef",
+        fit_fingerprint="cafe",
     )
     assert envelope["format_version"] == ARTIFACT_FORMAT_VERSION
     assert envelope["git_sha"] is not None
     assert envelope["seed"] == 3
     assert envelope["data_fingerprint"] == "deadbeef"
+    assert envelope["fit_fingerprint"] == "cafe"
 
     path = tmp_path / "artifact.pkl"
     save_artifact(path, envelope)
@@ -53,7 +55,9 @@ def test_envelope_carries_provenance(tmp_path):
 
 def test_save_is_atomic_and_leaves_no_temp_file(tmp_path):
     path = tmp_path / "artifact.pkl"
-    save_artifact(path, make_envelope(kind="mahalanobis", estimator="full", state=_state()))
+    save_artifact(
+        path, make_envelope(kind="mahalanobis", estimator="full", state=_state(), fit_fingerprint="cafe")
+    )
     leftovers = [p.name for p in tmp_path.iterdir() if p.name != "artifact.pkl"]
     assert leftovers == []
 
@@ -79,14 +83,16 @@ def test_missing_required_field_is_rejected(tmp_path):
 
 def test_unknown_kind_cannot_be_dispatched(tmp_path):
     path = tmp_path / "artifact.pkl"
-    save_artifact(path, make_envelope(kind="no_such_model", estimator="full", state=_state()))
+    save_artifact(
+        path, make_envelope(kind="no_such_model", estimator="full", state=_state(), fit_fingerprint="cafe")
+    )
     with pytest.raises(ValueError, match="unknown detector kind"):
         load_detector(path)
 
 
 def test_kind_mismatch_is_rejected(tmp_path):
     path = tmp_path / "artifact.pkl"
-    save_artifact(path, make_envelope(kind="markov", estimator="full", state=_state()))
+    save_artifact(path, make_envelope(kind="markov", estimator="full", state=_state(), fit_fingerprint="cafe"))
     with pytest.raises(ValueError, match="cannot load"):
         MahalanobisDetector.load(path)
 

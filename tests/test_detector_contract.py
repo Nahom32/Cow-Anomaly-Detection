@@ -55,7 +55,7 @@ def test_the_contract_cannot_be_instantiated():
 
 def test_a_detector_without_score_cannot_be_instantiated():
     class Incomplete(Detector):
-        def fit(self, train_data):
+        def _fit_impl(self, train_data):
             return None
 
     with pytest.raises(TypeError, match="score"):

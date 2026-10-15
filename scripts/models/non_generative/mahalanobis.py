@@ -42,7 +42,7 @@ class MahalanobisDetector(FittedModel):
         self.explained_variance_ = None
         self.pca_mean_ = None
 
-    def fit(self, features):
+    def _fit_impl(self, features):
         matrix = as_matrix(features)
         if matrix.shape[0] < 2:
             raise ValueError("MahalanobisDetector.fit needs at least 2 rows; nothing to estimate Sigma from")

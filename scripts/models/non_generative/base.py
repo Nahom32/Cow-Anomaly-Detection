@@ -25,7 +25,7 @@ from scripts.manifest import git_info
 from scripts.models.detector import Detector
 from scripts.utils.io import atomic_write_bytes
 
-ARTIFACT_FORMAT_VERSION = 1
+ARTIFACT_FORMAT_VERSION = 2
 SUPPORTED_ARTIFACT_FORMAT_VERSIONS = (ARTIFACT_FORMAT_VERSION,)
 
 _REQUIRED_FIELDS = (
@@ -37,6 +37,7 @@ _REQUIRED_FIELDS = (
     "seed",
     "git_sha",
     "data_fingerprint",
+    "fit_fingerprint",
 )
 
 _REGISTRY = {}
@@ -70,7 +71,9 @@ def register(cls):
     return cls
 
 
-def make_envelope(*, kind, estimator, state, config=None, seed=None, data_fingerprint=None, extra=None):
+def make_envelope(
+    *, kind, estimator, state, config=None, seed=None, data_fingerprint=None, fit_fingerprint=None, extra=None
+):
     if not estimator:
         raise ValueError(
             f"{kind!r} artifact must name its estimator. 'regularized' and 'full' share a Sigma shape "
@@ -85,6 +88,7 @@ def make_envelope(*, kind, estimator, state, config=None, seed=None, data_finger
         "seed": int(seed) if seed is not None else None,
         "git_sha": git_info().get("sha"),
         "data_fingerprint": data_fingerprint,
+        "fit_fingerprint": fit_fingerprint,
         "extra": dict(extra) if extra else {},
     }
 
@@ -102,6 +106,8 @@ def _validate(envelope):
         )
     if not envelope["estimator"]:
         raise ValueError("artifact envelope must name its estimator (3.4.1)")
+    if not envelope["fit_fingerprint"]:
+        raise ValueError("artifact envelope must record the fit rows it was fitted on (4.1.2)")
     return envelope
 
 
@@ -134,17 +140,18 @@ def load_detector(path):
 class FittedModel(Detector):
     """Base class for a detector whose entire fitted state is an explicit artifact.
 
-    Subclasses set `kind`, implement `fit`/`score`/`state_dict`, and provide a
-    `from_state` classmethod that rebuilds the object from a checkpointed state.
-    `fit` is where every statistic is estimated and it returns nothing; callers
-    fit on train only (1.8 / 4.1). `score` is higher-is-more-anomalous and
-    `predict` comes from the `Detector` contract (4.1.1).
+    Subclasses set `kind`, implement `_fit_impl`/`score`/`state_dict`, and
+    provide a `from_state` classmethod that rebuilds the object from a
+    checkpointed state. Statistics are estimated inside `fit` — the provenance
+    choke point of 4.1.2 — and callers fit on train only (1.8 / 4.1). `score`
+    is higher-is-more-anomalous and `predict` comes from the `Detector`
+    contract (4.1.1).
     """
 
     kind = None
     estimator = None
 
-    def fit(self, data):
+    def _fit_impl(self, data):
         raise NotImplementedError
 
     def score(self, data):
@@ -161,7 +168,9 @@ class FittedModel(Detector):
     def from_envelope(cls, envelope):
         if not cls.kind or envelope["kind"] != cls.kind:
             raise ValueError(f"{cls.__name__} cannot load a {envelope['kind']!r} artifact")
-        return cls.from_state(envelope["state"], config=envelope["config"], estimator=envelope["estimator"])
+        model = cls.from_state(envelope["state"], config=envelope["config"], estimator=envelope["estimator"])
+        model.fit_fingerprint_ = envelope["fit_fingerprint"]
+        return model
 
     @classmethod
     def load(cls, path):
@@ -177,6 +186,7 @@ class FittedModel(Detector):
                 config=config,
                 seed=seed,
                 data_fingerprint=data_fingerprint,
+                fit_fingerprint=self.fit_fingerprint_,
                 extra=extra,
             ),
         )

@@ -34,7 +34,7 @@ class MarkovDetector(FittedModel):
         self.transition_matrix_ = None
         self.prior_ = None
 
-    def fit(self, sequences):
+    def _fit_impl(self, sequences):
         sequences = _as_sequences(sequences)
         observed = int(sequences.max()) + 1
         n_states = observed if self.n_states is None else int(self.n_states)

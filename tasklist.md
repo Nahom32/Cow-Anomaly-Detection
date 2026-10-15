@@ -444,7 +444,7 @@ is a config change rather than bespoke plumbing.
       `fit(train_data) -> None`, `score(data) -> np.ndarray` (continuous anomaly score `A_t`),
       `predict(data, threshold) -> np.ndarray`. Today each model has bespoke training code and
       **no** score function at all.
-- [ ] **4.1.2** Enforce that **every** fitted object (scaler, PCA, `mu`, `Sigma`, weights) is
+- [x] **4.1.2** Enforce that **every** fitted object (scaler, PCA, `mu`, `Sigma`, weights) is
       constructed inside `fit()` from train data only. This is where the Phase 1 leak would come
       back — assert it in code (ties to 1.8).
 

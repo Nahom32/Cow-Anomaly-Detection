@@ -24,7 +24,7 @@ class IsolationForestDetector(FittedModel):
         self.seed = seed
         self.estimator_ = None
 
-    def fit(self, features):
+    def _fit_impl(self, features):
         from sklearn.ensemble import IsolationForest
 
         matrix = as_matrix(features)

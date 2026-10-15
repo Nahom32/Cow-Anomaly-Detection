@@ -19,7 +19,7 @@ class EuclideanDetector(FittedModel):
     def __init__(self):
         self.mu_ = None
 
-    def fit(self, features):
+    def _fit_impl(self, features):
         matrix = as_matrix(features)
         if matrix.shape[0] == 0:
             raise ValueError("EuclideanDetector.fit received an empty split")
