@@ -19,6 +19,15 @@ Two seams are deliberately stubs today:
   records what was run, fitted and scored — never how well it did. Per 6.1,
   Phase 4 metrics do not start before the novelty definition is written.
 
+The experimental matrix (4.2.2) is declared here too and checked two ways, so
+coverage is an invariant rather than a documentation promise: at spec time every
+method is either implemented (mapping to a real benchmark model) or explicitly
+declared pending on a task, with no silent gap and no mechanism exercised by
+nothing; at run time every cell of the declared grid must have exactly one row
+and no foreign row may exist. Tasklist 4.2.2 calls this a "10-model x
+5-mechanism grid", but the cited source declares four mechanisms, and four is
+what is encoded.
+
 Names say novelty, not anomaly (6.1): the settled framing is unseen-during-
 training, with no clinical claim. The axis is still the one 4.2.1 calls
 `anomaly_setting`.
@@ -76,6 +85,50 @@ MODEL_FACTORIES = {
     "pca": lambda seed: PCADetector(seed=seed),
 }
 
+# The experimental matrix (4.2.2), transcribed from the table that isolates each
+# mechanism. tasklist 4.2.2 calls it "10-model x 5-mechanism"; the cited source
+# (improvements_on_vad.md:385-396, problem #24) declares four mechanisms, and
+# four is what is encoded. Method names are the doc's, spelled as ids ("AE" ->
+# "autoencoder", "GRU + Mahalanobis" -> "gru_mahalanobis").
+MECHANISMS = ("static", "temporal", "generative", "covariance")
+
+EXPERIMENTAL_MATRIX = {
+    "euclidean": ("static",),
+    "mahalanobis": ("static", "covariance"),
+    "isolation_forest": ("static",),
+    "autoencoder": ("static", "generative"),
+    "vae": ("static", "generative"),
+    "markov": ("temporal",),
+    "gru_predictor": ("temporal",),
+    "lstm_predictor": ("temporal",),
+    "lstm_vae": ("temporal", "generative"),
+    "gru_mahalanobis": ("temporal", "covariance"),
+}
+
+MATRIX_SOURCE = "improvements_on_vad.md:385-396 (problem #24)"
+
+# Matrix method -> benchmark model id. Every method NOT listed here must appear
+# in PENDING_METHODS: absence from both is the "empty cell" 4.2.2 fails on, so a
+# new method cannot be added to the matrix and quietly go unrun.
+METHOD_MODELS = {
+    "euclidean": "euclidean",
+    "mahalanobis": "mahalanobis_full",
+    "isolation_forest": "isolation_forest",
+    "markov": "markov",
+}
+
+# Matrix method -> the tasklist task that will implement it. Explicit, not a
+# comment: the spec check distinguishes "not built yet, tracked" from "missing".
+PENDING_METHODS = {
+    "autoencoder": "4.3.1",
+    "vae": "4.3.1",
+    "gru_predictor": "4.3.1",
+    "lstm_predictor": "4.3.1",
+    "lstm_vae": "4.3.1",
+    "gru_mahalanobis": "4.3.1",
+}
+
+
 # Setting name -> provider. Populated by `register_setting`; empty until the
 # Phase 6 drivers land, which is why the default grid is inspectable but not
 # executable. Tests register their own providers here.
@@ -129,6 +182,45 @@ def build_model(name, seed):
     if not isinstance(model, Detector):
         raise TypeError(f"benchmark model {name!r} produced {type(model).__name__}, not a Detector (4.1.1)")
     return model
+
+
+def verify_matrix_spec():
+    """Fail loudly on any empty cell of the declared experimental matrix (4.2.2).
+
+    Three ways a cell goes empty, all checked before a run rather than noticed
+    in a paper table: a method that is neither implemented nor declared pending
+    (a silent gap), an implemented method whose model id does not exist, and a
+    mechanism that no method exercises (a column that would read as covered by
+    nothing). Returns the matrix size for logging.
+    """
+    methods = set(EXPERIMENTAL_MATRIX)
+    unaccounted = sorted(methods - set(METHOD_MODELS) - set(PENDING_METHODS))
+    if unaccounted:
+        raise RuntimeError(
+            f"experimental matrix has empty cells (4.2.2): {unaccounted} are neither implemented "
+            "(METHOD_MODELS) nor declared pending (PENDING_METHODS); source: " + MATRIX_SOURCE
+        )
+    both = sorted(set(METHOD_MODELS) & set(PENDING_METHODS))
+    if both:
+        raise RuntimeError(f"matrix methods {both} are both implemented and declared pending; pick one (4.2.2)")
+
+    for method, mechanisms in sorted(EXPERIMENTAL_MATRIX.items()):
+        if not mechanisms:
+            raise RuntimeError(f"matrix method {method!r} lists no mechanism; that row is empty (4.2.2)")
+        unknown = sorted(set(mechanisms) - set(MECHANISMS))
+        if unknown:
+            raise ValueError(f"matrix method {method!r} names unknown mechanisms {unknown}; known: {list(MECHANISMS)}")
+
+    for method, model_id in sorted(METHOD_MODELS.items()):
+        if model_id not in MODEL_FACTORIES:
+            raise ValueError(f"matrix method {method!r} maps to unknown benchmark model {model_id!r} (4.2.2)")
+        build_model(model_id, 0)  # constructibility is the Detector contract check (4.1.1)
+
+    exercised = set().union(*(set(mechanisms) for mechanisms in EXPERIMENTAL_MATRIX.values()))
+    uncovered = sorted(set(MECHANISMS) - exercised)
+    if uncovered:
+        raise RuntimeError(f"mechanisms {uncovered} are exercised by no method; the column is empty (4.2.2)")
+    return {"methods": len(methods), "mechanisms": len(MECHANISMS)}
 
 
 @dataclass(frozen=True)
@@ -202,6 +294,30 @@ def benchmark_grid(config):
             models, settings, splits, seeds, context_lengths
         )
     ]
+
+
+def verify_coverage(config, results_dir=None):
+    """Every declared grid cell has exactly one row, and no row is foreign (4.2.2).
+
+    Run-time counterpart of `verify_matrix_spec`: the declared grid is what this
+    config claims to run, so a cell with no row is an empty cell and a row with
+    no cell is an untraceable result (4.7.4). A run of a subset is fine — it is
+    checked against the grid it declared — but a results directory left holding
+    another config's rows is not. Returns a small summary for logging / 4.2.3.
+    """
+    results_dir = results_dir or config["benchmark"]["results_dir"]
+    if not os.path.isdir(results_dir):
+        raise FileNotFoundError(f"no results directory at {results_dir!r}; coverage cannot be checked (4.2.2)")
+    declared = {cell.cell_id() for cell in benchmark_grid(config)}
+    present = {name[: -len(".json")] for name in os.listdir(results_dir) if name.endswith(".json")}
+    missing = sorted(declared - present)
+    foreign = sorted(present - declared)
+    if missing or foreign:
+        raise RuntimeError(
+            f"coverage is not complete (4.2.2): {len(missing)} empty cell(s) {missing}; "
+            f"{len(foreign)} result(s) not in the declared grid {foreign}"
+        )
+    return {"declared": len(declared), "present": len(present)}
 
 
 def _rows(data, key):
@@ -296,10 +412,18 @@ def write_results_csv(results_dir):
 
 
 def run_benchmark(config, results_dir=None):
-    """Execute every declared cell once; returns the rows written."""
+    """Execute every declared cell once, then assert the run covered the grid.
+
+    The preset check runs before the first cell (a mistyped method should not
+    surface at cell 200), the post check after the last (a run is only complete
+    if every declared cell produced a traceable row).
+    """
+    verify_matrix_spec()
     cells = benchmark_grid(config)
     results_dir = results_dir or config["benchmark"]["results_dir"]
-    return [run_cell(cell, config, results_dir) for cell in cells]
+    rows = [run_cell(cell, config, results_dir) for cell in cells]
+    verify_coverage(config, results_dir)
+    return rows
 
 
 def main(argv=None, config=None):

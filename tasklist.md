@@ -453,7 +453,7 @@ is a config change rather than bespoke plumbing.
 - [x] **4.2.1** `run_benchmark.py`: iterate the full grid
       `model x anomaly_setting x split x seed x context_length`, writing one JSON/CSV row per run
       into a single `results/` directory.
-- [ ] **4.2.2** **Coverage matrix with enforcement.** Encode the experimental matrix from
+- [x] **4.2.2** **Coverage matrix with enforcement.** Encode the experimental matrix from
       `improvements_on_vad.md:385-396` (problem #24) — a 10-model x 5-mechanism grid — as a declared
       spec, and make the benchmark **fail loudly on any empty cell**. Coverage is a checked
       invariant, not a documentation promise.
