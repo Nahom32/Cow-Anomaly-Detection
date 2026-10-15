@@ -122,6 +122,81 @@ def _validate(checkpoint):
     return checkpoint
 
 
+# `from_version -> callable(checkpoint) -> checkpoint at from_version + 1`. Empty
+# while v1 is the only schema: the path exists so the first real migration is a
+# registration rather than a rewrite of the loader (3.6.1).
+_MIGRATIONS = {}
+
+
+def migrate_checkpoint(checkpoint):
+    """Bring a checkpoint up to `CHECKPOINT_FORMAT_VERSION` (3.6.1).
+
+    Loading must never silently accept an older schema and then misread its
+    fields, so a version with no registered migration fails loudly instead. A
+    bare weights-only file (no `format_version`) is the legacy case and is called
+    out by name rather than being mistaken for version `None`.
+    """
+    if not isinstance(checkpoint, dict):
+        raise TypeError(f"checkpoint must be a dict, got {type(checkpoint).__name__}")
+    fmt = checkpoint.get("format_version")
+    if fmt is None:
+        raise ValueError(
+            "checkpoint has no format_version — it is a legacy weights-only file that predates "
+            "the schema and is not loadable through this API (3.6.1)"
+        )
+    while fmt != CHECKPOINT_FORMAT_VERSION:
+        migration = _MIGRATIONS.get(fmt)
+        if migration is None:
+            raise ValueError(
+                f"unsupported checkpoint format_version: {fmt!r} (current is "
+                f"{CHECKPOINT_FORMAT_VERSION}); no migration registered"
+            )
+        checkpoint = migration(checkpoint)
+        fmt = checkpoint.get("format_version")
+    return checkpoint
+
+
+def assert_state_compatible(reference, state, *, context="model_state"):
+    """Raise unless `state` has exactly `reference`'s keys and tensor shapes (3.6.1).
+
+    `load_state_dict` with `strict=False` reports missing/unexpected keys as
+    return values and then proceeds, so a checkpoint built for another
+    architecture — a different feature width after a backbone change, say — can
+    load as a partial no-op. This is the explicit gate: same keys, same shapes, or
+    a loud error naming the mismatch.
+    """
+    if not isinstance(state, dict):
+        raise TypeError(f"{context} must be a dict, got {type(state).__name__}")
+    missing = sorted(set(reference) - set(state))
+    unexpected = sorted(set(state) - set(reference))
+    if missing or unexpected:
+        raise ValueError(
+            f"{context} does not match the model: missing keys {missing}, unexpected keys "
+            f"{unexpected} (3.6.1)"
+        )
+    for name, expected in reference.items():
+        actual = state[name]
+        if tuple(actual.shape) != tuple(expected.shape):
+            raise ValueError(
+                f"{context} tensor {name!r} has shape {tuple(actual.shape)} but the model built "
+                f"from the current config expects {tuple(expected.shape)} (3.6.1)"
+            )
+    return state
+
+
+def load_model_state(model, state, *, context="model_state"):
+    """Shape-checked `model.load_state_dict` — the one way a checkpoint's weights load (3.6.1).
+
+    `model` is the architecture the current config asks for, so comparing the
+    checkpoint against its `state_dict` is the "shape check against config": a
+    checkpoint whose width or depth no longer matches is rejected before any
+    tensor is copied, rather than partially applied.
+    """
+    assert_state_compatible(model.state_dict(), state, context=context)
+    model.load_state_dict(state)
+    return model
+
+
 def build_checkpoint(
     *,
     model_state,
@@ -219,16 +294,9 @@ def load_checkpoint(path, map_location="cpu"):
     except TypeError:
         # Older torch versions don't accept weights_only; try without it.
         checkpoint = torch.load(path, map_location=map_location)
-    except Exception:
-        raise
-    # Detect legacy bare state_dict: if it's just a dict of tensors (or other values) with no format_version.
-    if isinstance(checkpoint, dict) and "format_version" not in checkpoint and all(
-        isinstance(k, str) or isinstance(k, tuple) and all(isinstance(x, str) for x in k)
-        for k in checkpoint.keys()  # heuristic is loose; but bare state_dict keys are param names
-    ):
-        # More reliably: if keys look like model param names and required top-level missing -> legacy.
-        # But easier: check for absence of REQUIRED_FIELDS subset.
-        pass  # fall through to validation which will fail loudly
+    # Migrate an older schema forward, then validate. A bare state_dict has no
+    # format_version and is rejected by `migrate_checkpoint` by name (3.6.1).
+    checkpoint = migrate_checkpoint(checkpoint)
     _validate(checkpoint)
     return checkpoint
 

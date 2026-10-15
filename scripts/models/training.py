@@ -22,6 +22,7 @@ from scripts.checkpoint import (
     clear_epoch_checkpoints,
     epoch_checkpoint_name,
     load_checkpoint,
+    load_model_state,
     prune_checkpoint_dir,
     restore_rng_state,
     save_checkpoint,
@@ -188,7 +189,10 @@ def resume_training(path, model, optimizer, scheduler, stopper, device="cpu"):
     had the process never died.
     """
     checkpoint = load_checkpoint(path, map_location=device)
-    model.load_state_dict(checkpoint["model_state"])
+    # Shape-check the checkpoint against the model the current config built before
+    # copying anything, so a width/architecture change fails loudly instead of
+    # loading a partial state (3.6.1).
+    load_model_state(model, checkpoint["model_state"])
     if checkpoint.get("optimizer_state") is not None:
         optimizer.load_state_dict(checkpoint["optimizer_state"])
     if scheduler is not None and checkpoint.get("scheduler_state") is not None:

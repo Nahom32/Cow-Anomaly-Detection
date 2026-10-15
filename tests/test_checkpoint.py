@@ -13,6 +13,8 @@ from scripts.checkpoint import (
     epoch_checkpoint_name,
     is_legacy_checkpoint,
     load_checkpoint,
+    load_model_state,
+    migrate_checkpoint,
     parse_epoch_checkpoint,
     prune_checkpoint_dir,
     prune_checkpoints,
@@ -118,6 +120,68 @@ def test_is_legacy_checkpoint(tmp_path):
         seed=0,
     )
     assert not is_legacy_checkpoint(cp)
+
+
+# ── Validate on load (3.6.1) ──────────────────────────────────────────
+
+
+def test_migrate_checkpoint_is_a_noop_at_the_current_version():
+    cp = build_checkpoint(model_state={}, epoch=1, config={}, seed=0)
+    assert migrate_checkpoint(cp) is cp
+
+
+def test_migrate_checkpoint_runs_a_registered_migration(monkeypatch):
+    from scripts import checkpoint as cp
+
+    def upgrade_0_to_1(old):
+        return {**old, "format_version": CHECKPOINT_FORMAT_VERSION}
+
+    monkeypatch.setitem(cp._MIGRATIONS, 0, upgrade_0_to_1)
+    migrated = migrate_checkpoint({"format_version": 0, "model_state": {}})
+    assert migrated["format_version"] == CHECKPOINT_FORMAT_VERSION
+
+
+def test_migrate_checkpoint_rejects_an_unknown_version():
+    with pytest.raises(ValueError, match="no migration registered"):
+        migrate_checkpoint({"format_version": 99})
+
+
+def test_migrate_checkpoint_names_a_legacy_weights_only_file():
+    model = torch.nn.Linear(2, 1)
+    with pytest.raises(ValueError, match="legacy weights-only"):
+        migrate_checkpoint(model.state_dict())
+
+
+def test_load_rejects_a_legacy_weights_only_file(tmp_path):
+    path = tmp_path / "legacy.pt"
+    torch.save(torch.nn.Linear(2, 1).state_dict(), path)
+    with pytest.raises(ValueError, match="legacy weights-only"):
+        load_checkpoint(path)
+
+
+def test_load_model_state_restores_matching_weights():
+    source = torch.nn.Linear(4, 2)
+    target = torch.nn.Linear(4, 2)
+    with torch.no_grad():
+        source.weight.fill_(3.0)
+    load_model_state(target, source.state_dict())
+    for name, tensor in source.state_dict().items():
+        assert torch.equal(target.state_dict()[name], tensor)
+
+
+def test_load_model_state_rejects_a_shape_mismatch():
+    """3.6.1: a checkpoint for another width must fail, not load as a partial no-op."""
+    source = torch.nn.Linear(4, 2)
+    target = torch.nn.Linear(6, 2)
+    with pytest.raises(ValueError, match="shape"):
+        load_model_state(target, source.state_dict())
+
+
+def test_load_model_state_rejects_unexpected_or_missing_keys():
+    source = torch.nn.Linear(4, 2)
+    target = torch.nn.Sequential(torch.nn.Linear(4, 2), torch.nn.Linear(2, 1))
+    with pytest.raises(ValueError, match="does not match the model"):
+        load_model_state(target, source.state_dict())
 
 
 # ── Retention (3.2.2) ─────────────────────────────────────────────────

@@ -421,7 +421,7 @@ produced a given number.
 
 ### 3.6 Integrity & tests
 
-- [ ] **3.6.1** Validate on load: shape check against `config`, `format_version` migration path,
+- [x] **3.6.1** Validate on load: shape check against `config`, `format_version` migration path,
       hard failure on mismatch rather than a silent `load_state_dict` no-op.
 - [ ] **3.6.2** Tests: (a) save/load round-trip equality, (b) atomicity under simulated interrupt,
       (c) resume reproduces the uninterrupted curve, (d) sidecar-mismatch detection.
