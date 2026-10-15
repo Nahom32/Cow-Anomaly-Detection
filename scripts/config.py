@@ -85,6 +85,16 @@ CONFIG = {
     "vae_grad_clip": 1.0,
     "vae_early_stopping_patience": 10,
 
+    # Autoencoder (4.3.1) — the generative baseline the VAE must beat. Same
+    # training knobs as the flat VAE so a Flat-AE vs Flat-VAE comparison is not a
+    # difference in optimisation settings.
+    "autoencoder_epochs": 50,
+    "autoencoder_batch_size": 64,
+    "autoencoder_lr": 1e-3,
+    "autoencoder_hidden_dim": 128,
+    "autoencoder_latent_dim": 32,
+    "autoencoder_grad_clip": 1.0,
+
     # LSTM-VAE
     "lstm_vae_epochs": 50,
     "lstm_vae_batch_size": 32,

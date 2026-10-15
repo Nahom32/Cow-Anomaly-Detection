@@ -75,6 +75,40 @@ NOVELTY_SETTINGS = {
     "temporal_corruption": "6.5",
 }
 
+# Neural factories import torch lazily (inside the call, not at module import),
+# so the harness core stays importable without the neural stack. Hyperparameters
+# come from CONFIG rather than constructor defaults, so the benchmark's training
+# recipe and the pipeline's cannot drift.
+def _autoencoder(seed):
+    from scripts.models.generative import AutoencoderDetector
+
+    return AutoencoderDetector(
+        seed=seed,
+        hidden_dim=CONFIG["autoencoder_hidden_dim"],
+        latent_dim=CONFIG["autoencoder_latent_dim"],
+        epochs=CONFIG["autoencoder_epochs"],
+        batch_size=CONFIG["autoencoder_batch_size"],
+        lr=CONFIG["autoencoder_lr"],
+        grad_clip=CONFIG["autoencoder_grad_clip"],
+    )
+
+
+def _vae(seed):
+    from scripts.models.generative import VAEDetector
+
+    return VAEDetector(
+        seed=seed,
+        hidden_dim=CONFIG["vae_hidden_dim"],
+        latent_dim=CONFIG["vae_latent_dim"],
+        epochs=CONFIG["vae_epochs"],
+        batch_size=CONFIG["vae_batch_size"],
+        lr=CONFIG["vae_lr"],
+        beta=CONFIG["vae_beta"],
+        kl_warmup_epochs=CONFIG["vae_kl_warmup_epochs"],
+        grad_clip=CONFIG["vae_grad_clip"],
+    )
+
+
 # model id -> zero-argument-ish factory taking the cell seed. The `mahalanobis_*`
 # ids are 3.4.1's covariance estimators under explicit names: the estimator is
 # the experimental variable (3.4.1), so it is part of the model identity rather
@@ -89,6 +123,8 @@ MODEL_FACTORIES = {
     "mahalanobis_pca": lambda seed: MahalanobisDetector("pca_mahalanobis", seed=seed),
     "markov": lambda seed: MarkovDetector(),
     "pca": lambda seed: PCADetector(seed=seed),
+    "autoencoder": _autoencoder,
+    "vae": _vae,
 }
 
 # The experimental matrix (4.2.2), transcribed from the table that isolates each
@@ -121,13 +157,13 @@ METHOD_MODELS = {
     "mahalanobis": "mahalanobis_full",
     "isolation_forest": "isolation_forest",
     "markov": "markov",
+    "autoencoder": "autoencoder",
+    "vae": "vae",
 }
 
 # Matrix method -> the tasklist task that will implement it. Explicit, not a
 # comment: the spec check distinguishes "not built yet, tracked" from "missing".
 PENDING_METHODS = {
-    "autoencoder": "4.3.1",
-    "vae": "4.3.1",
     "gru_predictor": "4.3.1",
     "lstm_predictor": "4.3.1",
     "lstm_vae": "4.3.1",
