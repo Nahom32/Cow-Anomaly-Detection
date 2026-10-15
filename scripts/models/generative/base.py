@@ -1,8 +1,9 @@
 """Shared plumbing for the neural detectors (4.3.1).
 
-The generative roster rows (the flat AE and VAE here; the LSTM-VAE and the
-recurrent predictors in the next commit) differ in architecture and loss but
-share the three things the Phase 1 fixes made non-negotiable:
+The generative roster rows — the flat AE and VAE, the LSTM-VAE, the GRU/LSTM
+recurrent predictors, and the GRU+Mahalanobis combination — differ in
+architecture and loss but share the three things the Phase 1 fixes made
+non-negotiable:
 
 - the scaler is fitted on the training rows inside `fit` and carried with the
   module (1.1 / 4.1.2), so a later score cannot silently pair weights with a
@@ -18,8 +19,10 @@ share the three things the Phase 1 fixes made non-negotiable:
   per-element mean; the two order identically because the feature dimension is
   constant, so AUROC is unaffected — the benchmark uses the spec's squared L2.
 
-A subclass supplies `_build_module`, `_train_module` and `_reconstruct`; the base
-owns the scaler, the split, seeding, device placement and the score.
+A subclass supplies `_build_module`, `_train_module` and — for the models that
+reconstruct — `_reconstruct`; a model that scores in a latent space instead
+overrides `_anomaly_scores`. The base owns the scaler, the split, seeding,
+device placement and the score reduction.
 """
 
 import abc
@@ -122,14 +125,25 @@ class TorchDetector(Detector):
             raise RuntimeError(f"{type(self).__name__} used before fit; call fit() first")
 
     def score(self, data):
-        """Squared reconstruction error per observation, `||z - z_hat||^2` (4.1.1).
+        """The anomaly score per observation, higher-is-more-anomalous (4.1.1).
 
-        Reduced over every axis but the sample axis, so a flat row and a window
-        both yield one score per observation; higher is anomalous.
+        `_prepare` fixes the observation shape and `_anomaly_scores` fixes the
+        reduction; the two subclasses that matter are the reconstruction models
+        (`||z - z_hat||^2`) and the latent-space models (a distance in a learned
+        representation), so this method itself stays shape- and model-agnostic.
         """
         self._require_fitted()
         scaled = self.normalizer_.transform(self._prepare(data))
-        reconstruction = np.asarray(self._reconstruct(self.module_, scaled), dtype=np.float32)
+        return np.asarray(self._anomaly_scores(self.module_, scaled), dtype=np.float64)
+
+    def _anomaly_scores(self, module, scaled):
+        """Squared reconstruction error, reduced over every non-sample axis.
+
+        The default for the generative rows; a model that scores in a latent
+        space (the predictors' forecast error, GRU+Mahalanobis) overrides this
+        rather than pretending its output is a reconstruction.
+        """
+        reconstruction = np.asarray(self._reconstruct(module, scaled), dtype=np.float32)
         return np.sum((scaled - reconstruction) ** 2, axis=tuple(range(1, scaled.ndim)))
 
     @abc.abstractmethod
@@ -140,9 +154,16 @@ class TorchDetector(Detector):
     def _train_module(self, train_rows, val_rows):
         """Train `self.module_` on the scaled rows; `val_rows` may be empty."""
 
-    @abc.abstractmethod
     def _reconstruct(self, module, scaled):
-        """Deterministic reconstruction of `scaled`, same shape; no sampling (2.6)."""
+        """Deterministic reconstruction of `scaled`, same shape; no sampling (2.6).
+
+        Required by the default `_anomaly_scores`; only the reconstruction models
+        implement it.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} scores in a latent space and does not reconstruct; "
+            "it must override _anomaly_scores"
+        )
 
 
 class SequenceTorchDetector(TorchDetector):
@@ -152,3 +173,16 @@ class SequenceTorchDetector(TorchDetector):
 
     def _prepare(self, data):
         return as_windows(data, self.min_seq_len)
+
+
+def tensor_loader(rows, batch_size, shuffle=False):
+    """A DataLoader over one float32 tensor block of rows or windows, for `train_loop`.
+
+    torch is imported here rather than at module scope so this file — the shape
+    and scaler logic the tests exercise most — stays importable without torch.
+    """
+    import torch
+    from torch.utils.data import DataLoader, TensorDataset
+
+    features = torch.as_tensor(rows, dtype=torch.float32)
+    return DataLoader(TensorDataset(features), batch_size=batch_size, shuffle=shuffle)

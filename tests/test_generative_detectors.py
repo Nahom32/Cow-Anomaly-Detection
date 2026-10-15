@@ -16,6 +16,7 @@ import scripts.run_benchmark as rb  # noqa: E402
 from scripts.models.detector import Detector  # noqa: E402
 from scripts.models.generative import (  # noqa: E402
     AutoencoderDetector,
+    GRUMahalanobisDetector,
     LSTMVAEDetector,
     RecurrentPredictorDetector,
     VAEDetector,
@@ -224,3 +225,41 @@ def test_an_invalid_predictor_cell_is_loud():
 def test_as_windows_requires_three_dimensions():
     with pytest.raises(ValueError, match="n_windows, seq_len, n_features"):
         as_windows(np.zeros((5, DIM), dtype=np.float32))
+
+
+def test_combined_model_id_builds_through_the_benchmark_factory():
+    assert isinstance(rb.build_model("gru_mahalanobis", 0), Detector)
+
+
+def test_gru_mahalanobis_satisfies_the_contract():
+    detector = GRUMahalanobisDetector(seed=42, epochs=1, batch_size=16, hidden_dim=16)
+    detector.fit(_windows(48, 1))
+
+    scores = detector.score(_windows(10, 2))
+    assert scores.shape == (10,), "one score per window"
+    assert np.isfinite(scores).all() and (scores >= 0).all(), "a Mahalanobis distance is non-negative"
+
+    decisions = detector.predict(_windows(10, 2), threshold=float(np.median(scores)))
+    assert decisions.dtype == np.int8
+
+
+def test_gru_mahalanobis_scores_in_the_gru_embedding_space():
+    from scripts.models.non_generative import MahalanobisDetector
+
+    detector = GRUMahalanobisDetector(seed=42, epochs=1, batch_size=16, hidden_dim=16)
+    detector.fit(_windows(48, 1))
+
+    assert isinstance(detector.detector_, MahalanobisDetector)
+    windows = _windows(12, 3)
+    embeddings = detector._embed(detector.module_, detector.normalizer_.transform(windows))
+    assert embeddings.shape == (12, 16), "one hidden-dim embedding per window"
+    assert np.array_equal(detector.score(windows), detector.detector_.score(embeddings))
+
+
+def test_gru_mahalanobis_scores_out_of_distribution_windows_higher():
+    detector = GRUMahalanobisDetector(seed=42, epochs=20, batch_size=16, hidden_dim=24, lr=1e-2)
+    in_distribution = _windows(128, 1, scale=0.03)
+    detector.fit(in_distribution)
+
+    far = np.full((16, SEQ, DIM), 4.0, dtype=np.float32)
+    assert detector.score(far).mean() > detector.score(in_distribution).mean()

@@ -105,6 +105,12 @@ CONFIG = {
     "predictor_num_layers": 1,
     "predictor_grad_clip": 1.0,
 
+    # GRU + Mahalanobis (4.3.1, the combined row). The GRU's last hidden state is
+    # the representation; the covariance estimator is the shrinkage one because
+    # the hidden space is as high-dimensional and correlated as the raw features
+    # (problem #10), and the Mahalanobis model is fitted on train hidden states.
+    "gru_mahalanobis_estimator": "ledoit_wolf",
+
     # LSTM-VAE
     "lstm_vae_epochs": 50,
     "lstm_vae_batch_size": 32,

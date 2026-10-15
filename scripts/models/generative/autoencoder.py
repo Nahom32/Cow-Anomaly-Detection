@@ -11,9 +11,8 @@ cannot drift between the generative rows.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
 
-from scripts.models.generative.base import TorchDetector
+from scripts.models.generative.base import TorchDetector, tensor_loader
 from scripts.models.training import train_loop
 
 
@@ -84,8 +83,8 @@ class AutoencoderDetector(TorchDetector):
         return Autoencoder(input_dim, hidden_dim=self.hidden_dim, latent_dim=self.latent_dim)
 
     def _train_module(self, train_rows, val_rows):
-        train_loader = _loader(train_rows, self.batch_size, shuffle=True)
-        val_loader = _loader(val_rows, self.batch_size) if len(val_rows) else None
+        train_loader = tensor_loader(train_rows, self.batch_size, shuffle=True)
+        val_loader = tensor_loader(val_rows, self.batch_size) if len(val_rows) else None
         train_loop(
             self.module_, train_loader, val_loader,
             epochs=self.epochs, lr=self.lr, device=self.device,
@@ -97,8 +96,3 @@ class AutoencoderDetector(TorchDetector):
         with torch.no_grad():
             recon, _, _ = module(torch.as_tensor(scaled, dtype=torch.float32).to(self.device))
         return recon.cpu().numpy()
-
-
-def _loader(rows, batch_size, shuffle=False):
-    features = torch.as_tensor(rows, dtype=torch.float32)
-    return DataLoader(TensorDataset(features), batch_size=batch_size, shuffle=shuffle)

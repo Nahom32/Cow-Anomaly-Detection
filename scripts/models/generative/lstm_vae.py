@@ -9,9 +9,8 @@ temporal-and-generative row.
 """
 
 import torch
-from torch.utils.data import DataLoader, TensorDataset
 
-from scripts.models.generative.base import SequenceTorchDetector
+from scripts.models.generative.base import SequenceTorchDetector, tensor_loader
 from scripts.models.lstm_vae import LSTMVAE, train_lstm_vae
 
 
@@ -39,8 +38,8 @@ class LSTMVAEDetector(SequenceTorchDetector):
         )
 
     def _train_module(self, train_windows, val_windows):
-        train_loader = _loader(train_windows, self.batch_size, shuffle=True)
-        val_loader = _loader(val_windows, self.batch_size) if len(val_windows) else None
+        train_loader = tensor_loader(train_windows, self.batch_size, shuffle=True)
+        val_loader = tensor_loader(val_windows, self.batch_size) if len(val_windows) else None
         train_lstm_vae(
             self.module_, train_loader, val_loader,
             epochs=self.epochs, lr=self.lr, device=self.device,
@@ -54,9 +53,3 @@ class LSTMVAEDetector(SequenceTorchDetector):
             mu, _ = module.encode(windows)
             recon = module.decode(mu, seq_len=windows.size(1))
         return recon.cpu().numpy()
-
-
-def _loader(windows, batch_size, shuffle=False):
-    return DataLoader(
-        TensorDataset(torch.as_tensor(windows, dtype=torch.float32)), batch_size=batch_size, shuffle=shuffle
-    )

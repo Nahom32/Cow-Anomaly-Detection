@@ -17,9 +17,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
 
-from scripts.models.generative.base import SequenceTorchDetector, as_windows
+from scripts.models.generative.base import SequenceTorchDetector, tensor_loader
 from scripts.models.training import train_loop
 
 _CELLS = ("gru", "lstm")
@@ -38,6 +37,16 @@ class RecurrentPredictor(nn.Module):
         """`(forecast, None, None)`; `forecast[:, t]` predicts `x[:, t+1]`."""
         hidden, _ = self.rnn(x)
         return self.head(hidden), None, None
+
+    def encode(self, x):
+        """The last hidden state of each window, `(n_windows, hidden_dim)`.
+
+        The temporal representation GRU+Mahalanobis (4.3.1) scores in — kept on
+        the same module so the representation and its forecast head are trained
+        together by the same next-step objective.
+        """
+        hidden, _ = self.rnn(x)
+        return hidden[:, -1]
 
 
 def predictor_loss(forecast, x, mu, logvar, beta):
@@ -84,8 +93,8 @@ class RecurrentPredictorDetector(SequenceTorchDetector):
         )
 
     def _train_module(self, train_windows, val_windows):
-        train_loader = _loader(train_windows, self.batch_size, shuffle=True)
-        val_loader = _loader(val_windows, self.batch_size) if len(val_windows) else None
+        train_loader = tensor_loader(train_windows, self.batch_size, shuffle=True)
+        val_loader = tensor_loader(val_windows, self.batch_size) if len(val_windows) else None
         train_loop(
             self.module_, train_loader, val_loader,
             epochs=self.epochs, lr=self.lr, device=self.device,
@@ -99,18 +108,14 @@ class RecurrentPredictorDetector(SequenceTorchDetector):
             forecast, _, _ = module(torch.as_tensor(scaled, dtype=torch.float32).to(self.device))
         return forecast.cpu().numpy()
 
-    def score(self, data):
-        """`||z_{t+1} - z_hat_{t+1}||^2` for the window's last step; higher is anomalous (4.1.1)."""
-        self._require_fitted()
-        scaled = self.normalizer_.transform(as_windows(data, self.min_seq_len))
+    def _anomaly_scores(self, module, scaled):
+        """`||z_{t+1} - z_hat_{t+1}||^2` for the window's last step; higher is anomalous (4.1.1).
+
+        `forecast[:, -2]` is the forecast for the last step `x[:, -1]`; the score
+        is a latent forecast error, not a reconstruction, so it is not the base
+        reduction.
+        """
         with torch.no_grad():
-            forecast, _, _ = self.module_(torch.as_tensor(scaled, dtype=torch.float32).to(self.device))
-        # `forecast[:, -2]` is the forecast for the last step `x[:, -1]`.
+            forecast, _, _ = module(torch.as_tensor(scaled, dtype=torch.float32).to(self.device))
         predicted_last = forecast[:, -2].cpu().numpy()
         return np.sum((scaled[:, -1, :] - predicted_last) ** 2, axis=1)
-
-
-def _loader(windows, batch_size, shuffle=False):
-    return DataLoader(
-        TensorDataset(torch.as_tensor(windows, dtype=torch.float32)), batch_size=batch_size, shuffle=shuffle
-    )

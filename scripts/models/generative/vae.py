@@ -9,9 +9,8 @@ deliberately-not-mixed-in comparison (`:190`), so only reconstruction is scored.
 """
 
 import torch
-from torch.utils.data import DataLoader, TensorDataset
 
-from scripts.models.generative.base import TorchDetector
+from scripts.models.generative.base import TorchDetector, tensor_loader
 from scripts.models.vae import VAE, train_vae
 
 
@@ -36,8 +35,8 @@ class VAEDetector(TorchDetector):
         return VAE(input_dim, hidden_dim=self.hidden_dim, latent_dim=self.latent_dim)
 
     def _train_module(self, train_rows, val_rows):
-        train_loader = _loader(train_rows, self.batch_size, shuffle=True)
-        val_loader = _loader(val_rows, self.batch_size) if len(val_rows) else None
+        train_loader = tensor_loader(train_rows, self.batch_size, shuffle=True)
+        val_loader = tensor_loader(val_rows, self.batch_size) if len(val_rows) else None
         train_vae(
             self.module_, train_loader, val_loader,
             epochs=self.epochs, lr=self.lr, device=self.device,
@@ -51,8 +50,3 @@ class VAEDetector(TorchDetector):
             mu, _ = module.encode(features)
             recon = module.decode(mu)
         return recon.cpu().numpy()
-
-
-def _loader(rows, batch_size, shuffle=False):
-    features = torch.as_tensor(rows, dtype=torch.float32)
-    return DataLoader(TensorDataset(features), batch_size=batch_size, shuffle=shuffle)
